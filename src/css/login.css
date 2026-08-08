@@ -35,6 +35,11 @@
   --radius: 6px;
   --radius-lg: 10px;
 
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+
   /* Font */
   font-family: 'Inter', sans-serif;
 }
@@ -159,9 +164,11 @@ body {
   pointer-events: none;
 }
 
-.field input {
+.field input,
+.field select,
+.field textarea {
   width: 100%;
-  padding: 9px 36px 9px 34px;
+  padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 12.5px;
@@ -172,13 +179,26 @@ body {
   transition: border-color .15s, background .15s;
 }
 
-.field input:focus {
+.field-wrap svg.field-icon + input,
+.field-wrap svg.field-icon + select,
+.field-wrap svg.field-icon + textarea {
+  padding-left: 34px;
+}
+
+.field-wrap input:has(~ .toggle-pw) {
+  padding-right: 36px;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
   border-color: var(--border-hover);
   background: var(--card);
   box-shadow: 0 0 0 3px rgba(232,83,26,.07);
 }
 
-.field input::placeholder {
+.field input::placeholder,
+.field textarea::placeholder {
   color: var(--text3);
 }
 
@@ -245,31 +265,42 @@ body {
   text-decoration: underline;
 }
 
-.btn-login {
+.btn-login,
+.btn-submit {
   width: 100%;
-  padding: 10px;
+  padding: 11px 16px;
   background: var(--orange);
-  color: #fff;
+  color: #ffffff;
   border: none;
   border-radius: var(--radius);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
-  transition: background .15s, transform .1s;
+  transition: background 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 8px;
   letter-spacing: .2px;
+  box-shadow: 0 1px 3px rgba(232, 83, 26, 0.2);
 }
 
-.btn-login:hover {
+.btn-login:hover,
+.btn-submit:hover {
   background: #d44c15;
+  box-shadow: 0 2px 6px rgba(232, 83, 26, 0.3);
 }
 
-.btn-login:active {
-  transform: scale(.99);
+.btn-login:active,
+.btn-submit:active {
+  transform: scale(0.98);
+}
+
+.btn-login:focus-visible,
+.btn-submit:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(232, 83, 26, 0.25);
 }
 
 .btn-login svg {
