@@ -6,6 +6,8 @@ $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
 $businessId = $_SESSION['active_business_id'] ?? 0;
+$canCreateProduct = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['create']);
+$canUpdateProduct = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $category_filter = isset($_GET['category']) ? trim($_GET['category']) : '';
 
@@ -79,7 +81,9 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     <div class="card-header" style="flex-wrap: wrap; gap: 12px; display: flex; justify-content: space-between; align-items: center;">
       <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
         <div class="card-title">Item Catalog Directory</div>
-        <button class="btn-primary" onclick="openAddModal()">+ Add Product</button>
+        <?php if ($canCreateProduct): ?>
+          <button class="btn-primary" onclick="openAddModal()">+ Add Product</button>
+        <?php endif; ?>
       </div>
       <form method="GET" action="index.php" style="display: flex; gap: 8px; align-items: center;">
         <?php if (isset($_GET['role'])): ?>
@@ -146,6 +150,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
               </td>
               <td style="text-align: right;">
                 <div style="display:inline-flex; gap: 4px;">
+                  <?php if ($canUpdateProduct): ?>
                   <button class="btn-sm" onclick="showEdit(<?php echo htmlspecialchars(json_encode($row)); ?>)">Edit</button>
                   <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('Toggle status of this catalog item?');">
                     <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
@@ -153,6 +158,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
                     <input type="hidden" name="product_id" value="<?php echo (int)$row['id']; ?>">
                     <button type="submit" class="btn-sm" style="background: var(--bg); border: 1px solid var(--border); color: var(--text);">Toggle</button>
                   </form>
+                  <?php endif; ?>
                 </div>
               </td>
             </tr>
@@ -187,6 +193,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
 <!-- ==========================================
      MODAL: ADD PRODUCT
      ========================================== -->
+<?php if ($canCreateProduct): ?>
 <div class="modal-overlay" id="addModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -257,10 +264,12 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- ==========================================
      MODAL: EDIT PRODUCT
      ========================================== -->
+<?php if ($canUpdateProduct): ?>
 <div class="modal-overlay" id="editModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -332,6 +341,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <script>
 function openAddModal() {
@@ -360,20 +370,20 @@ function closeEdit() {
 }
 
 // Close modals when clicking outside
-document.getElementById('addModalOverlay').addEventListener('click', function(e) {
+document.getElementById('addModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeAddModal();
 });
-document.getElementById('editModalOverlay').addEventListener('click', function(e) {
+document.getElementById('editModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeEdit();
 });
 
 // Safeguard double submissions client-side
-document.getElementById('addProdForm').addEventListener('submit', function() {
+document.getElementById('addProdForm')?.addEventListener('submit', function() {
   document.getElementById('addBtn').disabled = true;
   document.getElementById('addBtn').style.opacity = '0.7';
   document.getElementById('addBtn').textContent = 'Saving...';
 });
-document.getElementById('editProdForm').addEventListener('submit', function() {
+document.getElementById('editProdForm')?.addEventListener('submit', function() {
   document.getElementById('updateBtn').disabled = true;
   document.getElementById('updateBtn').style.opacity = '0.7';
   document.getElementById('updateBtn').textContent = 'Updating...';

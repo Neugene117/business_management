@@ -6,6 +6,12 @@ $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
 $businessId = $_SESSION['active_business_id'] ?? 0;
+$reportMembershipId = $_SESSION['membership_id'] ?? null;
+$canGenerateReport = hasPermission($conn, $reportMembershipId, $businessId, $permissions['generate']);
+$canExportReport = hasPermission($conn, $reportMembershipId, $businessId, $permissions['export']);
+if ((isset($_GET['start_date']) || isset($_GET['end_date'])) && !$canGenerateReport) {
+    requirePermission($conn, $reportMembershipId, $businessId, $permissions['generate']);
+}
 
 // Set default dates to current month
 $start_date = isset($_GET['start_date']) ? trim($_GET['start_date']) : date('Y-m-01');
@@ -93,10 +99,12 @@ $ebResult = mysqli_stmt_get_result($ebStmt);
   <div class="card-header" style="flex-wrap: wrap; gap: 12px;">
     <div class="card-title">Select Reporting Period</div>
     
+    <?php if ($canGenerateReport || $canExportReport): ?>
     <form method="GET" action="index.php" style="display: flex; gap: 10px; align-items: center;">
       <?php if (isset($_GET['role'])): ?>
         <input type="hidden" name="role" value="<?php echo e($_GET['role']); ?>">
       <?php endif; ?>
+      <?php if ($canGenerateReport): ?>
       <label style="font-size:11px; font-weight:500;">Start:</label>
       <input type="date" name="start_date" value="<?php echo e($start_date); ?>" style="padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--text); font-size:12px;">
       
@@ -104,8 +112,12 @@ $ebResult = mysqli_stmt_get_result($ebStmt);
       <input type="date" name="end_date" value="<?php echo e($end_date); ?>" style="padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--text); font-size:12px;">
       
       <button class="btn-sm" type="submit">Generate Report</button>
+      <?php endif; ?>
+      <?php if ($canExportReport): ?>
       <button class="btn-sm" type="button" onclick="window.print()" style="background:var(--bg); border:1px solid var(--border); color:var(--text)">Print Statement</button>
+      <?php endif; ?>
     </form>
+    <?php endif; ?>
   </div>
 </div>
 

@@ -1,7 +1,8 @@
 <?php
 return [
-    'view'   => 'employees.view',
-    'submit' => 'employees.view',
-    'approve' => 'employees.permissions.manage'
+    'view_self' => 'leave.self.view',
+    'view_team' => 'leave.team.view',
+    'submit' => 'leave.self.create',
+    'approve' => 'leave.approve'
 ];
 ?>

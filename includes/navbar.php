@@ -1,3 +1,111 @@
+<?php
+$isNotificationEndpoint = isset($_SERVER['SCRIPT_FILENAME'])
+    && realpath($_SERVER['SCRIPT_FILENAME']) === realpath(__FILE__);
+
+if ($isNotificationEndpoint) {
+    require_once __DIR__ . '/../config/session.php';
+    require_once __DIR__ . '/../config/database.php';
+
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, private');
+
+    if (empty($_SESSION['user_id'])) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'message' => 'Authentication required.']);
+        exit();
+    }
+
+    $notificationAction = $_GET['notification_action'] ?? '';
+    $notificationUserId = (int)$_SESSION['user_id'];
+
+    if ($notificationAction === 'list' && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
+        $listQuery = "
+            SELECT id, title, message, type, link_url, read_at, created_at
+            FROM notifications
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 30
+        ";
+        $listStmt = mysqli_prepare($conn, $listQuery);
+        mysqli_stmt_bind_param($listStmt, 'i', $notificationUserId);
+        mysqli_stmt_execute($listStmt);
+        $listResult = mysqli_stmt_get_result($listStmt);
+        $items = [];
+        while ($notification = mysqli_fetch_assoc($listResult)) {
+            $items[] = [
+                'id' => (int)$notification['id'],
+                'title' => $notification['title'],
+                'message' => $notification['message'],
+                'type' => strtolower($notification['type']),
+                'link_url' => $notification['link_url'],
+                'unread' => $notification['read_at'] === null,
+                'created_at' => $notification['created_at']
+            ];
+        }
+
+        $countQuery = "SELECT COUNT(*) AS unread_count FROM notifications WHERE user_id = ? AND read_at IS NULL";
+        $countStmt = mysqli_prepare($conn, $countQuery);
+        mysqli_stmt_bind_param($countStmt, 'i', $notificationUserId);
+        mysqli_stmt_execute($countStmt);
+        $unreadCount = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($countStmt))['unread_count'] ?? 0);
+
+        echo json_encode(['success' => true, 'notifications' => $items, 'unread_count' => $unreadCount]);
+        exit();
+    }
+
+    if (in_array($notificationAction, ['mark_read', 'mark_all_read'], true)
+        && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+        $sessionToken = $_SESSION['csrf_token'] ?? '';
+        $submittedToken = $_POST['csrf_token'] ?? '';
+        if ($sessionToken === '' || $submittedToken === '' || !hash_equals($sessionToken, $submittedToken)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'Invalid request token.']);
+            exit();
+        }
+
+        if ($notificationAction === 'mark_read') {
+            $notificationId = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+            if ($notificationId <= 0) {
+                http_response_code(422);
+                echo json_encode(['success' => false, 'message' => 'Invalid notification.']);
+                exit();
+            }
+
+            // The authenticated user id is part of the UPDATE predicate. A user
+            // can never mark another user's notification as read.
+            $readQuery = "UPDATE notifications SET read_at = COALESCE(read_at, NOW(6)) WHERE id = ? AND user_id = ?";
+            $readStmt = mysqli_prepare($conn, $readQuery);
+            mysqli_stmt_bind_param($readStmt, 'ii', $notificationId, $notificationUserId);
+            mysqli_stmt_execute($readStmt);
+        } else {
+            $readAllQuery = "UPDATE notifications SET read_at = NOW(6) WHERE user_id = ? AND read_at IS NULL";
+            $readAllStmt = mysqli_prepare($conn, $readAllQuery);
+            mysqli_stmt_bind_param($readAllStmt, 'i', $notificationUserId);
+            mysqli_stmt_execute($readAllStmt);
+        }
+
+        $countQuery = "SELECT COUNT(*) AS unread_count FROM notifications WHERE user_id = ? AND read_at IS NULL";
+        $countStmt = mysqli_prepare($conn, $countQuery);
+        mysqli_stmt_bind_param($countStmt, 'i', $notificationUserId);
+        mysqli_stmt_execute($countStmt);
+        $unreadCount = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($countStmt))['unread_count'] ?? 0);
+
+        echo json_encode(['success' => true, 'unread_count' => $unreadCount]);
+        exit();
+    }
+
+    http_response_code(405);
+    echo json_encode(['success' => false, 'message' => 'Unsupported notification request.']);
+    exit();
+}
+
+$navbarMembershipId = $_SESSION['membership_id'] ?? null;
+$navbarBusinessId = $_SESSION['active_business_id'] ?? null;
+$navbarCanViewDashboard = hasPermission($conn, $navbarMembershipId, $navbarBusinessId, 'dashboard.view');
+$navbarCanViewSettings = hasPermission($conn, $navbarMembershipId, $navbarBusinessId, 'settings.view');
+$notificationCsrfToken = generateCsrfToken();
+$notificationEndpoint = $root_prefix . 'includes/navbar.php';
+?>
 <!-- TOPBAR / NAVBAR -->
 <header class="topbar">
   <div class="topbar-brand">
@@ -15,8 +123,10 @@
   <div class="topbar-title-area">
     <div class="topbar-page-title"><?php echo e($active_page_title); ?></div>
     <div class="breadcrumb">
+      <?php if ($navbarCanViewDashboard): ?>
       <a href="<?php echo $root_prefix; ?>pages/dashboard/index.php<?php echo e(getRolePreviewQuery()); ?>">Home</a>
       <span class="sep">/</span>
+      <?php endif; ?>
       <span class="cur"><?php echo e($active_page_title); ?></span>
     </div>
   </div>
@@ -38,18 +148,21 @@
         <a class="role-btn<?php echo $previewRole === 'employee' ? ' active' : ''; ?>" href="<?php echo e(getRolePreviewUrl('employee')); ?>">Employee</a>
       </nav>
     <?php endif; ?>
-    <div class="notif-wrap" style="position: relative;">
-      <button class="icon-btn" title="Notifications" id="notifBtn" onclick="toggleNotifDropdown()">
+    <div class="notif-wrap" id="notificationCenter" data-endpoint="<?php echo e($notificationEndpoint); ?>" data-csrf-token="<?php echo e($notificationCsrfToken); ?>" style="position: relative;">
+      <button class="icon-btn" title="Notifications" id="notifBtn" onclick="toggleNotifDropdown()" aria-label="Notifications" aria-expanded="false">
         <svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0"/></svg>
-        <span class="notif-dot" id="notifDot"></span>
+        <span class="notif-count" id="notifCount" hidden>0</span>
       </button>
-      <div class="dropdown" id="notifDropdown" style="min-width: 320px; max-height: 400px; display: none; flex-direction: column;">
-        <div class="dropdown-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding: 12px 14px;">
-          <div class="dropdown-name" style="font-size: 13px; font-weight: 600;">Notifications</div>
-          <button class="btn-sm" style="font-size: 10px; padding: 2px 6px;" onclick="clearAllNotifications(event)">Clear all</button>
+      <div class="dropdown" id="notifDropdown" role="dialog" aria-label="Notifications">
+        <div class="notif-header">
+          <div>
+            <div class="dropdown-name">Notifications</div>
+            <div class="notif-subtitle" id="notifSubtitle">Loading your notifications...</div>
+          </div>
+          <button class="notif-mark-all" id="notifMarkAllBtn" type="button">Mark all read</button>
         </div>
-        <div class="notif-list" id="notifList" style="overflow-y: auto; max-height: 340px;">
-          <!-- Populated by JS based on user role -->
+        <div class="notif-list" id="notifList" aria-live="polite">
+          <div class="notif-empty">Loading notifications...</div>
         </div>
       </div>
     </div>
@@ -116,14 +229,16 @@
             <?php echo e(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? '')); ?>
           </div>
           <div class="dropdown-email">
-            <?php echo e($_SESSION['email'] ?? ''); ?>
+            <?php echo e($_SESSION['email'] ?: ($_SESSION['phone'] ?? '')); ?>
           </div>
         </div>
+        <?php if ($navbarCanViewSettings): ?>
         <a href="<?php echo $root_prefix; ?>pages/settings/index.php<?php echo e(getRolePreviewQuery()); ?>" class="dropdown-item" style="text-decoration: none; color: inherit; display: flex; align-items: center; width: 100%; gap: 10px;">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M2 12h2M20 12h2M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41"/></svg>
           Settings
         </a>
         <div class="dropdown-divider"></div>
+        <?php endif; ?>
         <a href="<?php echo $root_prefix; ?>logout.php" class="dropdown-item danger" style="text-decoration: none; color: inherit; display: flex; align-items: center; width: 100%; gap: 10px;">
           <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
           Logout

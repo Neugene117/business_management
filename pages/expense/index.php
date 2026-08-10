@@ -6,6 +6,9 @@ $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
 $businessId = $_SESSION['active_business_id'] ?? 0;
+$canCreateExpense = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['create']);
+$canPostExpense = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['post']);
+$canVoidExpense = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['void']);
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
 $cat_filter = isset($_GET['expense_category_id']) ? (int)$_GET['expense_category_id'] : 0;
@@ -104,8 +107,10 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     <div class="card-header" style="flex-wrap: wrap; gap: 12px; display: flex; justify-content: space-between; align-items: center;">
       <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
         <div class="card-title">Expense Transactions Ledger</div>
-        <button class="btn-primary" onclick="openAddModal()">+ Record Expense</button>
-        <button class="btn-primary" style="background: var(--green);" onclick="openCatModal()">+ Add Category</button>
+        <?php if ($canCreateExpense): ?>
+          <button class="btn-primary" onclick="openAddModal()">+ Record Expense</button>
+          <button class="btn-primary" style="background: var(--green);" onclick="openCatModal()">+ Add Category</button>
+        <?php endif; ?>
       </div>      
       <form method="GET" action="index.php" style="display: flex; gap: 8px; align-items: center;">
         <?php if (isset($_GET['role'])): ?>
@@ -171,7 +176,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
               <td><?php echo e($row['first_name'] ? ($row['first_name'] . ' ' . $row['last_name']) : 'System'); ?></td>
               <td style="text-align: right;">
                 <div style="display:inline-flex; gap: 4px;">
-                  <?php if ($row['status'] === 'DRAFT'): ?>
+                  <?php if ($canPostExpense && $row['status'] === 'DRAFT'): ?>
                     <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('Post this expense transaction to accounts?');">
                       <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
                       <input type="hidden" name="action" value="post_expense">
@@ -179,7 +184,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
                       <button type="submit" class="btn-sm" style="background:var(--green); color:#fff; border:none;">Post</button>
                     </form>
                   <?php endif; ?>
-                  <?php if ($row['status'] !== 'VOIDED'): ?>
+                  <?php if ($canVoidExpense && $row['status'] !== 'VOIDED'): ?>
                     <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('VOID this expense transaction? This cannot be undone.');">
                       <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
                       <input type="hidden" name="action" value="void_expense">
@@ -221,6 +226,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
 <!-- ==========================================
      MODAL: LOG EXPENSE
      ========================================== -->
+<?php if ($canCreateExpense): ?>
 <div class="modal-overlay" id="addModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -347,10 +353,12 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- ==========================================
      MODAL: ADD EXPENSE CATEGORY
      ========================================== -->
+<?php if ($canCreateExpense): ?>
 <div class="modal-overlay" id="catModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -387,6 +395,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <script>
 function openAddModal() {
@@ -406,10 +415,10 @@ function closeCatModal() {
 }
 
 // Close modals when clicking outside
-document.getElementById('addModalOverlay').addEventListener('click', function(e) {
+document.getElementById('addModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeAddModal();
 });
-document.getElementById('catModalOverlay').addEventListener('click', function(e) {
+document.getElementById('catModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeCatModal();
 });
 
@@ -420,12 +429,12 @@ function calcTotals() {
 }
 
 // Safeguard double submissions client-side
-document.getElementById('addExpForm').addEventListener('submit', function() {
+document.getElementById('addExpForm')?.addEventListener('submit', function() {
   document.getElementById('addBtn').disabled = true;
   document.getElementById('addBtn').style.opacity = '0.7';
   document.getElementById('addBtn').textContent = 'Posting...';
 });
-document.getElementById('addCatForm').addEventListener('submit', function() {
+document.getElementById('addCatForm')?.addEventListener('submit', function() {
   document.getElementById('addCatBtn').disabled = true;
   document.getElementById('addCatBtn').style.opacity = '0.7';
   document.getElementById('addCatBtn').textContent = 'Saving...';

@@ -220,6 +220,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
 <!-- ==========================================
      MODAL: CREATE PURCHASE ORDER
      ========================================== -->
+<?php if ($canCreatePurchase): ?>
 <div class="modal-overlay" id="addModalOverlay">
   <div class="modal-content-card modal-lg">
     <div class="modal-header">
@@ -304,6 +305,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- ==========================================
      MODAL: VIEW DETAILS
@@ -329,6 +331,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
 <!-- ==========================================
      MODAL: RECEIVE PO ITEMS
      ========================================== -->
+<?php if ($canReceivePurchase): ?>
 <div class="modal-overlay" id="receiveModalOverlay">
   <div class="modal-content-card modal-lg">
     <div class="modal-header">
@@ -375,6 +378,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- Simple raw data arrays for JS row rendering -->
 <script>
@@ -457,13 +461,13 @@ function recalcPOSubtotal() {
 }
 
 // Close modals when clicking outside
-document.getElementById('addModalOverlay').addEventListener('click', function(e) {
+document.getElementById('addModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeAddModal();
 });
 document.getElementById('detailModalOverlay').addEventListener('click', function(e) {
   if (e.target === this) closeDetails();
 });
-document.getElementById('receiveModalOverlay').addEventListener('click', function(e) {
+document.getElementById('receiveModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeReceive();
 });
 
@@ -492,7 +496,7 @@ function closeReceive() {
 }
 
 // Safeguard double submissions client-side
-document.getElementById('addPOForm').addEventListener('submit', function() {
+document.getElementById('addPOForm')?.addEventListener('submit', function() {
   document.getElementById('submitPOBtn').disabled = true;
   document.getElementById('submitPOBtn').style.opacity = '0.7';
   document.getElementById('submitPOBtn').textContent = 'Saving PO...';

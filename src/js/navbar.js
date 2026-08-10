@@ -23,6 +23,8 @@ function toggleDropdown() {
       }
       if (notifDropdown) {
         notifDropdown.classList.remove('open');
+        var notifBtn = document.getElementById('notifBtn');
+        if (notifBtn) notifBtn.setAttribute('aria-expanded', 'false');
       }
       dropdown.classList.add('open');
     } else {
@@ -40,6 +42,7 @@ function toggleNotifDropdown() {
   var appGridPanel = document.getElementById('appGridPanel');
   var appGridOverlay = document.getElementById('appGridOverlay');
   var gridBtn = document.getElementById('gridBtn');
+  var notifBtn = document.getElementById('notifBtn');
 
   if (notifDropdown) {
     var isOpen = notifDropdown.classList.contains('open');
@@ -54,32 +57,143 @@ function toggleNotifDropdown() {
         profileDropdown.classList.remove('open');
       }
       notifDropdown.classList.add('open');
+      if (notifBtn) notifBtn.setAttribute('aria-expanded', 'true');
     } else {
       notifDropdown.classList.remove('open');
+      if (notifBtn) notifBtn.setAttribute('aria-expanded', 'false');
     }
   }
 }
 
-/**
- * Clear all notifications and show empty state
- */
-function clearAllNotifications(event) {
-  if (event) {
-    event.stopPropagation();
+var notificationState = {
+  endpoint: '',
+  csrfToken: '',
+  items: [],
+  unreadCount: 0
+};
+
+function notificationActionUrl(action) {
+  var url = new URL(notificationState.endpoint, window.location.href);
+  url.searchParams.set('notification_action', action);
+  return url.toString();
+}
+
+function formatNotificationTime(value) {
+  if (!value) return '';
+  var date = new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return value;
+
+  var seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return 'Just now';
+  if (seconds < 3600) return Math.floor(seconds / 60) + ' min ago';
+  if (seconds < 86400) return Math.floor(seconds / 3600) + ' hr ago';
+  if (seconds < 604800) return Math.floor(seconds / 86400) + ' days ago';
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function notificationIcon(type) {
+  var icon = document.createElement('span');
+  var normalizedType = ['warning', 'danger', 'success'].includes(type) ? type : 'info';
+  var colorClass = normalizedType === 'warning' ? 'amber' : normalizedType === 'danger' ? 'red' : normalizedType === 'success' ? 'green' : 'blue';
+  icon.className = 'notif-icon-box notif-icon-' + colorClass;
+  icon.setAttribute('aria-hidden', 'true');
+
+  if (normalizedType === 'warning') {
+    icon.innerHTML = '<svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg>';
+  } else if (normalizedType === 'danger') {
+    icon.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+  } else if (normalizedType === 'success') {
+    icon.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>';
+  } else {
+    icon.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
   }
-  var notifList = document.getElementById('notifList');
-  var notifDot = document.getElementById('notifDot');
-  
-  if (notifList) {
-    notifList.innerHTML = `
-      <div class="notif-empty">
-        <svg viewBox="0 0 24 24"><path d="M22 17H2a3 3 0 003-3V9a7 7 0 0114 0v5a3 3 0 003 3zm-8.27 4a2 2 0 01-3.46 0"/></svg>
-        <span>All caught up! No new notifications.</span>
-      </div>
-    `;
+  return icon;
+}
+
+function updateNotificationCount(count) {
+  notificationState.unreadCount = Math.max(0, Number(count) || 0);
+  var badge = document.getElementById('notifCount');
+  var subtitle = document.getElementById('notifSubtitle');
+  var markAllButton = document.getElementById('notifMarkAllBtn');
+
+  if (badge) {
+    badge.textContent = notificationState.unreadCount > 99 ? '99+' : String(notificationState.unreadCount);
+    badge.hidden = notificationState.unreadCount === 0;
   }
-  if (notifDot) {
-    notifDot.style.display = 'none';
+  if (subtitle) {
+    subtitle.textContent = notificationState.unreadCount === 0
+      ? 'You are all caught up'
+      : notificationState.unreadCount + (notificationState.unreadCount === 1 ? ' unread notification' : ' unread notifications');
+  }
+  if (markAllButton) markAllButton.disabled = notificationState.unreadCount === 0;
+}
+
+function renderNotifications(items) {
+  var list = document.getElementById('notifList');
+  if (!list) return;
+  list.replaceChildren();
+
+  if (!items.length) {
+    var empty = document.createElement('div');
+    empty.className = 'notif-empty';
+    empty.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 17H2a3 3 0 003-3V9a7 7 0 0114 0v5a3 3 0 003 3zm-8.27 4a2 2 0 01-3.46 0"/></svg><span>No notifications yet.</span>';
+    list.appendChild(empty);
+    return;
+  }
+
+  items.forEach(function (item) {
+    var row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'notif-item' + (item.unread ? ' unread' : '');
+    row.dataset.notificationId = String(item.id);
+    row.appendChild(notificationIcon(item.type));
+
+    var textBox = document.createElement('span');
+    textBox.className = 'notif-text-box';
+    var title = document.createElement('span');
+    title.className = 'notif-title';
+    title.textContent = item.title;
+    textBox.appendChild(title);
+
+    if (item.message) {
+      var message = document.createElement('span');
+      message.className = 'notif-message';
+      message.textContent = item.message;
+      textBox.appendChild(message);
+    }
+
+    var time = document.createElement('span');
+    time.className = 'notif-time';
+    time.textContent = formatNotificationTime(item.created_at);
+    textBox.appendChild(time);
+    row.appendChild(textBox);
+    row.addEventListener('click', function () { markAsRead(row, item.id); });
+    list.appendChild(row);
+  });
+}
+
+async function loadNotifications() {
+  var list = document.getElementById('notifList');
+  try {
+    var response = await fetch(notificationActionUrl('list'), {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) throw new Error('Unable to load notifications.');
+    var data = await response.json();
+    if (!data.success) throw new Error(data.message || 'Unable to load notifications.');
+    notificationState.items = Array.isArray(data.notifications) ? data.notifications : [];
+    renderNotifications(notificationState.items);
+    updateNotificationCount(data.unread_count);
+  } catch (error) {
+    if (list) {
+      list.replaceChildren();
+      var failure = document.createElement('div');
+      failure.className = 'notif-empty';
+      failure.textContent = 'Notifications could not be loaded.';
+      list.appendChild(failure);
+    }
   }
 }
 
@@ -102,6 +216,8 @@ document.addEventListener('click', function (e) {
     var notifDropdown = document.getElementById('notifDropdown');
     if (notifDropdown) {
       notifDropdown.classList.remove('open');
+      var notifBtn = document.getElementById('notifBtn');
+      if (notifBtn) notifBtn.setAttribute('aria-expanded', 'false');
     }
   }
 });
@@ -141,145 +257,74 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // --- Dynamic Notifications Population ---
-  var notifList = document.getElementById('notifList');
-  var notifDot = document.getElementById('notifDot');
-  if (notifList) {
-    // Detect active role from query parameters (fallback to session/owner context)
-    var urlParams = new URLSearchParams(window.location.search);
-    var activeRole = urlParams.get('role') || 'owner';
+  var notificationCenter = document.getElementById('notificationCenter');
+  if (notificationCenter) {
+    notificationState.endpoint = notificationCenter.dataset.endpoint || '';
+    notificationState.csrfToken = notificationCenter.dataset.csrfToken || '';
 
-    // Role-specific mock notifications
-    var notifications = {
-      super_admin: [
-        {
-          id: 1,
-          title: "Pending Approval: 'Alpha Mining Co' submitted business registration documents.",
-          type: "warning",
-          time: "10 mins ago",
-          unread: true
-        },
-        {
-          id: 2,
-          title: "Security Notice: 2 failed login attempts recorded for admin account.",
-          type: "danger",
-          time: "2 hours ago",
-          unread: true
-        },
-        {
-          id: 3,
-          title: "Database Backup: Scheduled platform snapshot completed successfully.",
-          type: "success",
-          time: "Today, 4:00 AM",
-          unread: false
-        }
-      ],
-      owner: [
-        {
-          id: 1,
-          title: "Low Stock Alert: Tin (Sn) inventory has reached minimum safety limit (1,326 kg).",
-          type: "warning",
-          time: "5 mins ago",
-          unread: true
-        },
-        {
-          id: 2,
-          title: "Leave Request: John Doe submitted a Sick Leave application for review.",
-          type: "info",
-          time: "45 mins ago",
-          unread: true
-        },
-        {
-          id: 3,
-          title: "Monthly Report: June Sales & Purchases spreadsheet is generated and ready.",
-          type: "success",
-          time: "Today, 9:15 AM",
-          unread: false
-        }
-      ],
-      employee: [
-        {
-          id: 1,
-          title: "Leave Approved: Your Sick Leave request for Aug 10-12 has been approved.",
-          type: "success",
-          time: "1 hour ago",
-          unread: true
-        },
-        {
-          id: 2,
-          title: "Performance Target: You achieved 110% of your weekly logged entries.",
-          type: "info",
-          time: "Yesterday",
-          unread: false
-        }
-      ]
-    };
-
-    var currentNotifs = notifications[activeRole] || notifications['owner'];
-    
-    // Check for unread statuses to set badge dot
-    var hasUnread = currentNotifs.some(function(n) { return n.unread; });
-    if (notifDot) {
-      notifDot.style.display = hasUnread ? 'block' : 'none';
+    var markAllButton = document.getElementById('notifMarkAllBtn');
+    if (markAllButton) {
+      markAllButton.addEventListener('click', function (event) {
+        event.stopPropagation();
+        markAllNotificationsAsRead();
+      });
     }
 
-    renderNotifications(currentNotifs);
-  }
-
-  function renderNotifications(items) {
-    if (!notifList) return;
-    if (items.length === 0) {
-      notifList.innerHTML = `
-        <div class="notif-empty">
-          <svg viewBox="0 0 24 24"><path d="M22 17H2a3 3 0 003-3V9a7 7 0 0114 0v5a3 3 0 003 3zm-8.27 4a2 2 0 01-3.46 0"/></svg>
-          <span>All caught up! No new notifications.</span>
-        </div>
-      `;
-      return;
-    }
-
-    var html = '';
-    items.forEach(function(item) {
-      var icon = '';
-      if (item.type === 'warning') {
-        icon = `<div class="notif-icon-box notif-icon-amber"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg></div>`;
-      } else if (item.type === 'danger') {
-        icon = `<div class="notif-icon-box notif-icon-red"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>`;
-      } else if (item.type === 'success') {
-        icon = `<div class="notif-icon-box notif-icon-green"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>`;
-      } else { // info
-        icon = `<div class="notif-icon-box notif-icon-blue"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></div>`;
-      }
-
-      var unreadClass = item.unread ? ' unread' : '';
-
-      html += `
-        <div class="notif-item${unreadClass}" onclick="markAsRead(this, ${item.id})">
-          ${icon}
-          <div class="notif-text-box">
-            <div class="notif-title">${item.title}</div>
-            <div class="notif-time">${item.time}</div>
-          </div>
-        </div>
-      `;
-    });
-
-    notifList.innerHTML = html;
+    loadNotifications();
+    window.setInterval(loadNotifications, 60000);
   }
 });
 
-/**
- * Click handler to mark item as read
- */
-function markAsRead(element, id) {
-  if (element.classList.contains('unread')) {
+async function markAsRead(element, id) {
+  if (!element.classList.contains('unread')) return;
+
+  var formData = new URLSearchParams();
+  formData.set('csrf_token', notificationState.csrfToken);
+  formData.set('notification_id', String(id));
+
+  try {
+    var response = await fetch(notificationActionUrl('mark_read'), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: formData.toString()
+    });
+    if (!response.ok) throw new Error('Unable to mark notification as read.');
+    var data = await response.json();
+    if (!data.success) throw new Error(data.message || 'Unable to mark notification as read.');
     element.classList.remove('unread');
-    
-    // Check if there are any remaining unread items in DOM
-    var remainingUnread = document.querySelector('.notif-item.unread');
-    var notifDot = document.getElementById('notifDot');
-    if (!remainingUnread && notifDot) {
-      notifDot.style.display = 'none';
-    }
+    var item = notificationState.items.find(function (notification) { return Number(notification.id) === Number(id); });
+    if (item) item.unread = false;
+    updateNotificationCount(data.unread_count);
+  } catch (error) {
+    loadNotifications();
+  }
+}
+
+async function markAllNotificationsAsRead() {
+  if (notificationState.unreadCount === 0) return;
+  var button = document.getElementById('notifMarkAllBtn');
+  if (button) button.disabled = true;
+
+  var formData = new URLSearchParams();
+  formData.set('csrf_token', notificationState.csrfToken);
+
+  try {
+    var response = await fetch(notificationActionUrl('mark_all_read'), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: formData.toString()
+    });
+    if (!response.ok) throw new Error('Unable to update notifications.');
+    var data = await response.json();
+    if (!data.success) throw new Error(data.message || 'Unable to update notifications.');
+    notificationState.items.forEach(function (item) { item.unread = false; });
+    document.querySelectorAll('.notif-item.unread').forEach(function (item) { item.classList.remove('unread'); });
+    updateNotificationCount(data.unread_count);
+  } catch (error) {
+    loadNotifications();
+  } finally {
+    if (button) button.disabled = notificationState.unreadCount === 0;
   }
 }

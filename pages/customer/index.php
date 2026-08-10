@@ -6,6 +6,8 @@ $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
 $businessId = $_SESSION['active_business_id'] ?? 0;
+$canCreateCustomer = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['create']);
+$canUpdateCustomer = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // Server side pagination
@@ -52,7 +54,9 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
   <div class="card">
     <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
       <div class="card-title">Customers Registry Logs</div>
-      <button class="btn-primary" onclick="openAddModal()">+ Add Customer</button>
+      <?php if ($canCreateCustomer): ?>
+        <button class="btn-primary" onclick="openAddModal()">+ Add Customer</button>
+      <?php endif; ?>
     </div>
     
     <table class="data-table">
@@ -92,6 +96,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
               </td>
               <td style="text-align: right;">
                 <div style="display:inline-flex; gap: 6px;">
+                  <?php if ($canUpdateCustomer): ?>
                   <button class="btn-sm" onclick="showEdit(<?php echo htmlspecialchars(json_encode($row)); ?>)">Edit</button>
                   <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('Toggle status of this customer?');">
                     <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
@@ -99,6 +104,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
                     <input type="hidden" name="customer_id" value="<?php echo (int)$row['id']; ?>">
                     <button type="submit" class="btn-sm" style="background: var(--bg); border: 1px solid var(--border); color: var(--text);">Toggle Status</button>
                   </form>
+                  <?php endif; ?>
                 </div>
               </td>
             </tr>
@@ -130,6 +136,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
 <!-- ==========================================
      MODAL: ADD CUSTOMER
      ========================================== -->
+<?php if ($canCreateCustomer): ?>
 <div class="modal-overlay" id="addModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -186,10 +193,12 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- ==========================================
      MODAL: EDIT CUSTOMER
      ========================================== -->
+<?php if ($canUpdateCustomer): ?>
 <div class="modal-overlay" id="editModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -247,6 +256,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <script>
 function openAddModal() {
@@ -274,20 +284,20 @@ function closeEdit() {
 }
 
 // Close modals when clicking outside
-document.getElementById('addModalOverlay').addEventListener('click', function(e) {
+document.getElementById('addModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeAddModal();
 });
-document.getElementById('editModalOverlay').addEventListener('click', function(e) {
+document.getElementById('editModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeEdit();
 });
 
 // Safeguard double submissions client-side
-document.getElementById('addCustForm').addEventListener('submit', function() {
+document.getElementById('addCustForm')?.addEventListener('submit', function() {
   document.getElementById('addBtn').disabled = true;
   document.getElementById('addBtn').style.opacity = '0.7';
   document.getElementById('addBtn').textContent = 'Saving...';
 });
-document.getElementById('editCustForm').addEventListener('submit', function() {
+document.getElementById('editCustForm')?.addEventListener('submit', function() {
   document.getElementById('updateBtn').disabled = true;
   document.getElementById('updateBtn').style.opacity = '0.7';
   document.getElementById('updateBtn').textContent = 'Updating...';

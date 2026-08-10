@@ -3,13 +3,18 @@ $page_title = 'Leave Management';
 require_once __DIR__ . '/../../includes/header.php';
 
 $permissions = require __DIR__ . '/permissions.php';
-requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
-
 $businessId = $_SESSION['active_business_id'] ?? 0;
 $membershipId = $_SESSION['membership_id'] ?? 0;
+$canViewOwnLeave = hasPermission($conn, $membershipId, $businessId, $permissions['view_self']);
+$canViewTeamLeave = hasPermission($conn, $membershipId, $businessId, $permissions['view_team']);
+if (!$canViewOwnLeave && !$canViewTeamLeave) {
+    requirePermission($conn, $membershipId, $businessId, $permissions['view_self']);
+}
+$canSubmitLeave = hasPermission($conn, $membershipId, $businessId, $permissions['submit']);
+$canApproveLeave = hasPermission($conn, $membershipId, $businessId, $permissions['approve']);
 
-// Use the authenticated role or the validated Super Admin preview role.
-$is_owner = in_array(getEffectiveUserRole(), ['owner', 'super_admin'], true);
+// Team access controls the management view; approval remains a separate action.
+$is_owner = $canViewTeamLeave;
 
 // Ensure leave types exist, otherwise seed defaults
 $checkTypes = "SELECT COUNT(*) as cnt FROM leave_types WHERE business_id = ?";
@@ -120,6 +125,7 @@ $role_query = getRolePreviewQuery();
               <td style="font-size:11.5px; color:var(--text3);"><?php echo e($row['reason'] ?? 'N/A'); ?></td>
               <td style="text-align: right;">
                 <div style="display:inline-flex; gap: 4px;">
+                  <?php if ($canApproveLeave): ?>
                   <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('Approve this leave request?');">
                     <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
                     <input type="hidden" name="action" value="approve">
@@ -127,6 +133,7 @@ $role_query = getRolePreviewQuery();
                     <button type="submit" class="btn-sm" style="background:var(--green); color:#fff; border:none;">Approve</button>
                   </form>
                   <button class="btn-action reject" style="font-size:11px; padding:4px 8px;" onclick="triggerReject(<?php echo (int)$row['id']; ?>)">Reject</button>
+                  <?php endif; ?>
                 </div>
               </td>
             </tr>
@@ -203,7 +210,9 @@ $role_query = getRolePreviewQuery();
   <div class="card">
     <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
       <div class="card-title">My Leave History Requests</div>
-      <button class="btn-primary" onclick="openAddModal()">+ Request Time Off</button>
+      <?php if ($canSubmitLeave): ?>
+        <button class="btn-primary" onclick="openAddModal()">+ Request Time Off</button>
+      <?php endif; ?>
     </div>
     
       <table class="data-table">
@@ -243,7 +252,7 @@ $role_query = getRolePreviewQuery();
                 </td>
                 <td style="font-size:11.5px; color:var(--text3);"><?php echo e($row['decision_note'] ?? 'N/A'); ?></td>
                 <td style="text-align: right;">
-                  <?php if ($row['status'] === 'PENDING'): ?>
+                  <?php if ($canSubmitLeave && $row['status'] === 'PENDING'): ?>
                     <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('Cancel this leave request?');">
                       <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
                       <input type="hidden" name="action" value="cancel">
@@ -263,6 +272,7 @@ $role_query = getRolePreviewQuery();
 <!-- ==========================================
      MODAL: APPLY FOR TIME OFF
      ========================================== -->
+<?php if ($canSubmitLeave): ?>
 <div class="modal-overlay" id="addModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -327,6 +337,7 @@ $role_query = getRolePreviewQuery();
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <script>
 function openAddModal() {
@@ -338,7 +349,7 @@ function closeAddModal() {
 }
 
 // Close modal when clicking outside
-document.getElementById('addModalOverlay').addEventListener('click', function(e) {
+document.getElementById('addModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeAddModal();
 });
 
@@ -359,7 +370,7 @@ function calcLeaveDays() {
   }
 }
 
-document.getElementById('addLeaveForm').addEventListener('submit', function(e) {
+document.getElementById('addLeaveForm')?.addEventListener('submit', function(e) {
   const days = parseFloat(document.getElementById('req_days').value) || 0;
   if (days <= 0) {
     e.preventDefault();
@@ -377,6 +388,7 @@ document.getElementById('addLeaveForm').addEventListener('submit', function(e) {
 <!-- ==========================================
      MODAL: REJECT LEAVE (REASON REQUIRED)
      ========================================== -->
+<?php if ($canApproveLeave): ?>
 <div class="modal-overlay" id="rejectModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -406,6 +418,7 @@ document.getElementById('addLeaveForm').addEventListener('submit', function(e) {
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <script>
 function triggerReject(leaveId) {
@@ -417,7 +430,7 @@ function closeReject() {
   document.getElementById('rejectModalOverlay').style.display = 'none';
 }
 
-document.getElementById('rejectModalOverlay').addEventListener('click', function(e) {
+document.getElementById('rejectModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeReject();
 });
 </script>

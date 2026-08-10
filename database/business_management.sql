@@ -1625,6 +1625,24 @@ INSERT INTO `users` (`id`, `email`, `phone`, `first_name`, `last_name`, `status`
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `notifications`
+--
+
+CREATE TABLE `notifications` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `user_id` bigint(20) UNSIGNED NOT NULL,
+  `business_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `title` varchar(255) NOT NULL,
+  `message` text DEFAULT NULL,
+  `type` enum('INFO','SUCCESS','WARNING','DANGER') NOT NULL DEFAULT 'INFO',
+  `link_url` varchar(500) DEFAULT NULL,
+  `read_at` datetime(6) DEFAULT NULL,
+  `created_at` datetime(6) NOT NULL DEFAULT current_timestamp(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `user_platform_roles`
 --
 
@@ -2207,6 +2225,14 @@ ALTER TABLE `users`
   ADD UNIQUE KEY `uq_users_phone` (`phone`);
 
 --
+-- Indexes for table `notifications`
+--
+ALTER TABLE `notifications`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_notifications_user_unread` (`user_id`,`read_at`,`created_at`),
+  ADD KEY `idx_notifications_business` (`business_id`,`created_at`);
+
+--
 -- Indexes for table `user_platform_roles`
 --
 ALTER TABLE `user_platform_roles`
@@ -2477,6 +2503,12 @@ ALTER TABLE `users`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT for table `notifications`
+--
+ALTER TABLE `notifications`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
 -- Constraints for dumped tables
 --
 
@@ -2668,6 +2700,13 @@ ALTER TABLE `membership_roles`
   ADD CONSTRAINT `fk_mr_assigned_by` FOREIGN KEY (`assigned_by_membership_id`) REFERENCES `business_memberships` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_mr_membership` FOREIGN KEY (`business_id`,`membership_id`) REFERENCES `business_memberships` (`business_id`, `id`) ON DELETE CASCADE,
   ADD CONSTRAINT `fk_mr_role` FOREIGN KEY (`business_id`,`business_role_id`) REFERENCES `business_roles` (`business_id`, `id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `notifications`
+--
+ALTER TABLE `notifications`
+  ADD CONSTRAINT `fk_notifications_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_notifications_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `platform_role_permissions`

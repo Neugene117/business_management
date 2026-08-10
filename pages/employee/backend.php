@@ -23,27 +23,27 @@ validateCsrfToken($_POST['csrf_token'] ?? '');
 
 $action = isset($_POST['action']) ? $_POST['action'] : '';
 $businessId = $_SESSION['active_business_id'];
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$role_query = getRolePreviewQuery();
 
 switch ($action) {
     case 'create':
         requirePermission($conn, $_SESSION['membership_id'], $businessId, $permissions['create']);
 
         // Collect parameters
-        $employee_number = strtoupper(trim($_POST['employee_number'] ?? ''));
+        $employee_number = null;
         $first_name = trim($_POST['first_name'] ?? '');
         $last_name = trim($_POST['last_name'] ?? '');
-        $email = strtolower(trim($_POST['email'] ?? ''));
+        $email = null;
         $phone = trim($_POST['phone'] ?? '');
         $password = $_POST['password'] ?? '';
-        $job_title = trim($_POST['job_title'] ?? NULL);
-        $department = trim($_POST['department'] ?? NULL);
-        $hire_date = trim($_POST['hire_date'] ?? NULL);
+        $job_title = null;
+        $department = null;
+        $hire_date = null;
         $business_role_id = isset($_POST['business_role_id']) ? (int)$_POST['business_role_id'] : 0;
         $emergency_contact_name = trim($_POST['emergency_contact_name'] ?? NULL);
         $emergency_contact_phone = trim($_POST['emergency_contact_phone'] ?? NULL);
 
-        if (empty($employee_number) || empty($first_name) || empty($last_name) || empty($email) || empty($phone) || empty($password) || empty($business_role_id)) {
+        if (empty($first_name) || empty($last_name) || empty($phone) || empty($password) || empty($business_role_id)) {
             setFlashMessage('error', 'All marked fields (*) are required.');
             header("Location: index.php" . $role_query);
             exit();
@@ -56,34 +56,31 @@ switch ($action) {
         }
 
         // Validate business role exists under this business
-        $brQuery = "SELECT id FROM business_roles WHERE id = ? AND business_id = ? LIMIT 1";
+        $brQuery = "SELECT id, code, name FROM business_roles WHERE id = ? AND business_id = ? LIMIT 1";
         $brStmt = mysqli_prepare($conn, $brQuery);
         mysqli_stmt_bind_param($brStmt, 'ii', $business_role_id, $businessId);
         mysqli_stmt_execute($brStmt);
-        if (mysqli_num_rows(mysqli_stmt_get_result($brStmt)) === 0) {
+        $selectedRole = mysqli_fetch_assoc(mysqli_stmt_get_result($brStmt));
+        if (!$selectedRole) {
             setFlashMessage('error', 'Invalid business role selected.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+        if (!isSuperAdmin() && (strtoupper($selectedRole['code']) === 'OWNER' || strtolower($selectedRole['name']) === 'owner')) {
+            setFlashMessage('error', 'Only the Super Admin can assign the Owner role.');
             header("Location: index.php" . $role_query);
             exit();
         }
 
         mysqli_begin_transaction($conn);
         try {
-            // Check email uniqueness
-            $chkUserQ = "SELECT id FROM users WHERE email = ? LIMIT 1 FOR UPDATE";
+            // Phone is the required login identifier when no email is supplied.
+            $chkUserQ = "SELECT id FROM users WHERE phone = ? LIMIT 1 FOR UPDATE";
             $cuStmt = mysqli_prepare($conn, $chkUserQ);
-            mysqli_stmt_bind_param($cuStmt, 's', $email);
+            mysqli_stmt_bind_param($cuStmt, 's', $phone);
             mysqli_stmt_execute($cuStmt);
             if (mysqli_num_rows(mysqli_stmt_get_result($cuStmt)) > 0) {
-                throw new Exception("Email is already registered in the system.");
-            }
-
-            // Check employee code uniqueness for this business
-            $chkEmpQ = "SELECT membership_id FROM employee_profiles WHERE business_id = ? AND employee_number = ? LIMIT 1 FOR UPDATE";
-            $ceStmt = mysqli_prepare($conn, $chkEmpQ);
-            mysqli_stmt_bind_param($ceStmt, 'is', $businessId, $employee_number);
-            mysqli_stmt_execute($ceStmt);
-            if (mysqli_num_rows(mysqli_stmt_get_result($ceStmt)) > 0) {
-                throw new Exception("Employee number code already exists in this business.");
+                throw new Exception("Phone number is already registered in the system.");
             }
 
             // 1. Insert User
@@ -146,10 +143,19 @@ switch ($action) {
             // 6. Write Audit log
             writeAuditLog($conn, $businessId, 'EMPLOYEE_CREATED', 'business_membership', $empMembershipId, [
                 'employee_number' => $employee_number,
-                'email' => $email,
+                'phone' => $phone,
                 'job_title' => $job_title,
                 'business_role_id' => $business_role_id
             ]);
+            createUserNotification(
+                $conn,
+                $userId,
+                $businessId,
+                'Employee account created',
+                'Your employee account is ready. You can sign in using your phone number.',
+                'SUCCESS',
+                'pages/dashboard/index.php'
+            );
 
             mysqli_commit($conn);
             setFlashMessage('success', 'Employee account created successfully.');
@@ -181,13 +187,33 @@ switch ($action) {
             exit();
         }
 
+        $statusQuery = "SELECT status FROM business_memberships WHERE id = ? AND business_id = ? AND member_type = 'EMPLOYEE' LIMIT 1";
+        $statusStmt = mysqli_prepare($conn, $statusQuery);
+        mysqli_stmt_bind_param($statusStmt, 'ii', $empMembershipId, $businessId);
+        mysqli_stmt_execute($statusStmt);
+        $currentMembership = mysqli_fetch_assoc(mysqli_stmt_get_result($statusStmt));
+        if (!$currentMembership) {
+            setFlashMessage('error', 'Employee membership not found.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+        if ($status !== $currentMembership['status']) {
+            requirePermission($conn, $_SESSION['membership_id'], $businessId, $permissions['suspend']);
+        }
+
         // Validate business role
-        $brQuery = "SELECT id FROM business_roles WHERE id = ? AND business_id = ? LIMIT 1";
+        $brQuery = "SELECT id, code, name FROM business_roles WHERE id = ? AND business_id = ? LIMIT 1";
         $brStmt = mysqli_prepare($conn, $brQuery);
         mysqli_stmt_bind_param($brStmt, 'ii', $business_role_id, $businessId);
         mysqli_stmt_execute($brStmt);
-        if (mysqli_num_rows(mysqli_stmt_get_result($brStmt)) === 0) {
+        $selectedRole = mysqli_fetch_assoc(mysqli_stmt_get_result($brStmt));
+        if (!$selectedRole) {
             setFlashMessage('error', 'Invalid business role selected.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+        if (!isSuperAdmin() && (strtoupper($selectedRole['code']) === 'OWNER' || strtolower($selectedRole['name']) === 'owner')) {
+            setFlashMessage('error', 'Only the Super Admin can assign the Owner role.');
             header("Location: index.php" . $role_query);
             exit();
         }
@@ -213,7 +239,7 @@ switch ($action) {
             }
 
             // 1. Update user first_name, last_name, and user status to DISABLED if membership is TERMINATED
-            $userStatus = ($status === 'TERMINATED') ? 'DISABLED' : 'ACTIVE';
+            $userStatus = ($status === 'ACTIVE') ? 'ACTIVE' : 'DISABLED';
             $updUser = "UPDATE users SET first_name = ?, last_name = ?, status = ?, updated_at = NOW(6) WHERE id = ?";
             $uuStmt = mysqli_prepare($conn, $updUser);
             mysqli_stmt_bind_param($uuStmt, 'sssi', $first_name, $last_name, $userStatus, $oldRow['user_id']);

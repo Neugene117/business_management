@@ -224,6 +224,7 @@ $canVoidSale = hasPermission($conn, $_SESSION['membership_id'] ?? null, $busines
 <!-- ==========================================
      MODAL: LOG POS CUSTOMER SALE
      ========================================== -->
+<?php if ($canCreateSale): ?>
 <div class="modal-overlay" id="addModalOverlay">
   <div class="modal-content-card modal-lg">
     <div class="modal-header">
@@ -318,6 +319,7 @@ $canVoidSale = hasPermission($conn, $_SESSION['membership_id'] ?? null, $busines
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- ==========================================
      MODAL: VIEW INVOICE
@@ -430,7 +432,7 @@ function recalcTotals() {
 }
 
 // Close modals when clicking outside
-document.getElementById('addModalOverlay').addEventListener('click', function(e) {
+document.getElementById('addModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeAddModal();
 });
 document.getElementById('detailModalOverlay').addEventListener('click', function(e) {
@@ -450,7 +452,7 @@ function closeDetails() {
 }
 
 // Safeguard double submissions client-side
-document.getElementById('addSaleForm').addEventListener('submit', function() {
+document.getElementById('addSaleForm')?.addEventListener('submit', function() {
   document.getElementById('submitBtn').disabled = true;
   document.getElementById('submitBtn').style.opacity = '0.7';
   document.getElementById('submitBtn').textContent = 'Logging sale...';

@@ -130,9 +130,11 @@ $role_query = getRolePreviewQuery();
         </div>
       </div>
 
+      <?php if ($canUpdateSettings): ?>
       <button type="submit" class="btn-primary" style="width: 100%; border:none; padding:10px; cursor:pointer;" id="profileBtn">
         Save Profile Parameters
       </button>
+      <?php endif; ?>
     </form>
   </div>
 
@@ -189,9 +191,11 @@ $role_query = getRolePreviewQuery();
         <p style="font-size:10px; color: var(--text3); margin-top: 4px; padding-left: 24px;">If cleared, sales orders are blocked if available stock falls below requested sales quantities.</p>
       </div>
 
+      <?php if ($canUpdateSettings): ?>
       <button type="submit" class="btn-primary" style="width: 100%; border:none; padding:10px; cursor:pointer;" id="acctBtn">
         Save Accounting Rules
       </button>
+      <?php endif; ?>
     </form>
   </div>
 </div>

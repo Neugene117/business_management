@@ -25,6 +25,77 @@ $action = isset($_POST['action']) ? $_POST['action'] : '';
 $businessId = (int)($_SESSION['active_business_id'] ?? 0);
 $role_query = getRolePreviewQuery();
 
+/**
+ * Accept only existing BUSINESS-scoped permission identifiers.
+ * Returning null distinguishes invalid input from a valid empty selection.
+ */
+function validateRolePermissionSelection($conn, $submittedPermissions): ?array {
+    if (!is_array($submittedPermissions)) {
+        return null;
+    }
+
+    $permissionIds = [];
+    foreach ($submittedPermissions as $permissionId) {
+        $validatedId = filter_var($permissionId, FILTER_VALIDATE_INT);
+        if ($validatedId === false || $validatedId <= 0) {
+            return null;
+        }
+        $permissionIds[] = (int)$validatedId;
+    }
+    $permissionIds = array_values(array_unique($permissionIds));
+
+    if ($permissionIds === []) {
+        return [];
+    }
+
+    $placeholders = implode(',', array_fill(0, count($permissionIds), '?'));
+    $query = "SELECT COUNT(*) AS total FROM permissions WHERE scope = 'BUSINESS' AND id IN ($placeholders)";
+    $stmt = mysqli_prepare($conn, $query);
+    if (!$stmt) {
+        return null;
+    }
+    $types = str_repeat('i', count($permissionIds));
+    mysqli_stmt_bind_param($stmt, $types, ...$permissionIds);
+    mysqli_stmt_execute($stmt);
+    $validTotal = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($stmt))['total'] ?? 0);
+
+    return $validTotal === count($permissionIds) ? $permissionIds : null;
+}
+
+/**
+ * Replace a role's assigned permission set inside the caller's transaction.
+ */
+function replaceRolePermissions($conn, int $businessId, int $roleId, array $permissionIds): void {
+    $deleteQuery = "DELETE FROM business_role_permissions WHERE business_id = ? AND business_role_id = ?";
+    $deleteStmt = mysqli_prepare($conn, $deleteQuery);
+    mysqli_stmt_bind_param($deleteStmt, 'ii', $businessId, $roleId);
+    if (!mysqli_stmt_execute($deleteStmt)) {
+        throw new RuntimeException('Unable to clear the existing role permissions.');
+    }
+
+    if ($permissionIds === []) {
+        return;
+    }
+
+    $insertQuery = "INSERT INTO business_role_permissions (business_id, business_role_id, permission_id) VALUES (?, ?, ?)";
+    $insertStmt = mysqli_prepare($conn, $insertQuery);
+    foreach ($permissionIds as $permissionId) {
+        mysqli_stmt_bind_param($insertStmt, 'iii', $businessId, $roleId, $permissionId);
+        if (!mysqli_stmt_execute($insertStmt)) {
+            throw new RuntimeException('Unable to assign a selected role permission.');
+        }
+    }
+}
+
+function roleDetailsRedirect(int $roleId): string {
+    $params = ['role_id' => $roleId];
+    $previewRole = getPreviewRole();
+    if ($previewRole !== null) {
+        $params['role'] = $previewRole;
+    }
+    return 'index.php?' . http_build_query($params);
+}
+
 switch ($action) {
     case 'create_permission':
         requireSuperAdmin();
@@ -129,12 +200,24 @@ switch ($action) {
     case 'create_role':
         requirePermission($conn, $_SESSION['membership_id'], $businessId, $permissions['create']);
 
+        if (!isSuperAdmin() && !isBusinessOwner()) {
+            setFlashMessage('error', 'Only the Business Owner or Super Admin can create business roles.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+
         $code = strtoupper(trim($_POST['code'] ?? ''));
         $name = trim($_POST['name'] ?? '');
         $description = trim($_POST['description'] ?? '');
+        $selectedPermissions = validateRolePermissionSelection($conn, $_POST['permissions'] ?? []);
 
         if (empty($code) || empty($name)) {
             setFlashMessage('error', 'Role code and display name are required.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+        if ($selectedPermissions === null) {
+            setFlashMessage('error', 'One or more selected permissions are invalid.');
             header("Location: index.php" . $role_query);
             exit();
         }
@@ -156,21 +239,116 @@ switch ($action) {
             exit();
         }
 
-        $insQuery = "
-            INSERT INTO business_roles (business_id, code, name, description, is_system, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, 0, NOW(6), NOW(6))
-        ";
-        $stmt = mysqli_prepare($conn, $insQuery);
-        mysqli_stmt_bind_param($stmt, 'isss', $businessId, $code, $name, $description);
-        if (mysqli_stmt_execute($stmt)) {
+        mysqli_begin_transaction($conn);
+        try {
+            $insQuery = "
+                INSERT INTO business_roles (business_id, code, name, description, is_system, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 0, NOW(6), NOW(6))
+            ";
+            $stmt = mysqli_prepare($conn, $insQuery);
+            mysqli_stmt_bind_param($stmt, 'isss', $businessId, $code, $name, $description);
+            if (!mysqli_stmt_execute($stmt)) {
+                throw new RuntimeException('Unable to create the business role.');
+            }
             $roleId = mysqli_insert_id($conn);
+            replaceRolePermissions($conn, $businessId, $roleId, $selectedPermissions);
             writeAuditLog($conn, $businessId, 'BUSINESS_ROLE_CREATED', 'business_role', $roleId, [
                 'code' => $code,
-                'name' => $name
+                'name' => $name,
+                'permission_ids' => $selectedPermissions
             ]);
-            setFlashMessage('success', 'Custom business role created successfully.');
-        } else {
+            mysqli_commit($conn);
+            setFlashMessage('success', 'Custom business role and permissions created successfully.');
+            header('Location: ' . roleDetailsRedirect($roleId));
+            exit();
+        } catch (Throwable $e) {
+            mysqli_rollback($conn);
+            error_log('Business role creation failed: ' . $e->getMessage());
             setFlashMessage('error', 'Failed to create business role.');
+        }
+        header("Location: index.php" . $role_query);
+        exit();
+
+    case 'update_role':
+        requirePermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
+
+        $roleId = isset($_POST['role_id']) ? (int)$_POST['role_id'] : 0;
+        $code = strtoupper(trim($_POST['code'] ?? ''));
+        $name = trim($_POST['name'] ?? '');
+        $description = trim($_POST['description'] ?? '');
+        $selectedPermissions = validateRolePermissionSelection($conn, $_POST['permissions'] ?? []);
+
+        if ($roleId <= 0 || $code === '' || $name === '') {
+            setFlashMessage('error', 'Role code and display name are required.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+        if ($selectedPermissions === null) {
+            setFlashMessage('error', 'One or more selected permissions are invalid.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+
+        $roleQuery = "SELECT id, code, name, description, is_system FROM business_roles WHERE id = ? AND business_id = ? LIMIT 1";
+        $roleStmt = mysqli_prepare($conn, $roleQuery);
+        mysqli_stmt_bind_param($roleStmt, 'ii', $roleId, $businessId);
+        mysqli_stmt_execute($roleStmt);
+        $roleRow = mysqli_fetch_assoc(mysqli_stmt_get_result($roleStmt));
+
+        if (!$roleRow) {
+            setFlashMessage('error', 'Role record not found.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+
+        $isOwnerRole = strcasecmp($roleRow['code'], 'OWNER') === 0
+            || strcasecmp($roleRow['name'], 'Owner') === 0;
+        if (!isSuperAdmin()) {
+            if (!isBusinessOwner()) {
+                setFlashMessage('error', 'Only the Business Owner or Super Admin can edit business roles.');
+                header("Location: index.php" . $role_query);
+                exit();
+            }
+            if ($isOwnerRole || strcasecmp($code, 'OWNER') === 0 || strcasecmp($name, 'Owner') === 0) {
+                setFlashMessage('error', 'Only the Super Admin can edit or manage the Owner role.');
+                header("Location: index.php" . $role_query);
+                exit();
+            }
+        }
+
+        $duplicateQuery = "SELECT id FROM business_roles WHERE business_id = ? AND code = ? AND id <> ? LIMIT 1";
+        $duplicateStmt = mysqli_prepare($conn, $duplicateQuery);
+        mysqli_stmt_bind_param($duplicateStmt, 'isi', $businessId, $code, $roleId);
+        mysqli_stmt_execute($duplicateStmt);
+        if (mysqli_num_rows(mysqli_stmt_get_result($duplicateStmt)) > 0) {
+            setFlashMessage('error', 'A role with this code already exists.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+
+        mysqli_begin_transaction($conn);
+        try {
+            $updateQuery = "UPDATE business_roles SET code = ?, name = ?, description = ?, updated_at = NOW(6) WHERE id = ? AND business_id = ?";
+            $updateStmt = mysqli_prepare($conn, $updateQuery);
+            mysqli_stmt_bind_param($updateStmt, 'sssii', $code, $name, $description, $roleId, $businessId);
+            if (!mysqli_stmt_execute($updateStmt)) {
+                throw new RuntimeException('Unable to update the business role.');
+            }
+            replaceRolePermissions($conn, $businessId, $roleId, $selectedPermissions);
+            writeAuditLog($conn, $businessId, 'BUSINESS_ROLE_UPDATED', 'business_role', (string)$roleId, [
+                'code' => $code,
+                'name' => $name,
+                'description' => $description,
+                'permission_ids' => $selectedPermissions
+            ], $roleRow);
+            mysqli_commit($conn);
+            setFlashMessage('success', 'Business role and assigned permissions updated successfully.');
+            header('Location: ' . roleDetailsRedirect($roleId));
+            exit();
+        } catch (Throwable $e) {
+            mysqli_rollback($conn);
+            error_log('Business role update failed: ' . $e->getMessage());
+            setFlashMessage('error', 'Failed to update the business role.');
         }
         header("Location: index.php" . $role_query);
         exit();
@@ -242,13 +420,19 @@ switch ($action) {
         exit();
 
     case 'update_role_permissions':
-        requireSuperAdmin();
+        requirePermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
+
+        if (!isSuperAdmin() && !isBusinessOwner()) {
+            setFlashMessage('error', 'Only the Business Owner or Super Admin can assign role permissions.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
 
         $roleId = isset($_POST['role_id']) ? (int)$_POST['role_id'] : 0;
-        $selected_perms = $_POST['permissions'] ?? []; // Array of permission IDs
+        $selected_perms = validateRolePermissionSelection($conn, $_POST['permissions'] ?? []);
 
-        if (empty($roleId)) {
-            setFlashMessage('error', 'Invalid role identifier.');
+        if (empty($roleId) || $selected_perms === null) {
+            setFlashMessage('error', 'Invalid role or permission selection.');
             header("Location: index.php" . $role_query);
             exit();
         }
@@ -265,43 +449,17 @@ switch ($action) {
             exit();
         }
 
-        $selected_perms = array_values(array_unique(array_map('intval', (array)$selected_perms)));
-        if (!empty($selected_perms)) {
-            $placeholders = implode(',', array_fill(0, count($selected_perms), '?'));
-            $validQuery = "SELECT COUNT(*) AS total FROM permissions WHERE scope = 'BUSINESS' AND id IN ($placeholders)";
-            $validStmt = mysqli_prepare($conn, $validQuery);
-            $types = str_repeat('i', count($selected_perms));
-            mysqli_stmt_bind_param($validStmt, $types, ...$selected_perms);
-            mysqli_stmt_execute($validStmt);
-            $validTotal = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($validStmt))['total'] ?? 0);
-            if ($validTotal !== count($selected_perms)) {
-                setFlashMessage('error', 'One or more selected permissions are invalid.');
-                header("Location: index.php" . $role_query);
-                exit();
-            }
+        $isOwnerRole = strcasecmp($roleRow['code'], 'OWNER') === 0
+            || strcasecmp($roleRow['name'], 'Owner') === 0;
+        if (!isSuperAdmin() && $isOwnerRole) {
+            setFlashMessage('error', 'Only the Super Admin can edit or manage the Owner role.');
+            header("Location: index.php" . $role_query);
+            exit();
         }
 
         mysqli_begin_transaction($conn);
         try {
-            // Delete existing role permissions
-            $delQuery = "DELETE FROM business_role_permissions WHERE business_id = ? AND business_role_id = ?";
-            $dStmt = mysqli_prepare($conn, $delQuery);
-            mysqli_stmt_bind_param($dStmt, 'ii', $businessId, $roleId);
-            mysqli_stmt_execute($dStmt);
-
-            // Insert new role permissions
-            if (!empty($selected_perms)) {
-                $insQuery = "
-                    INSERT INTO business_role_permissions (business_id, business_role_id, permission_id) 
-                    VALUES (?, ?, ?)
-                ";
-                $iStmt = mysqli_prepare($conn, $insQuery);
-                foreach ($selected_perms as $pId) {
-                    $pId = (int)$pId;
-                    mysqli_stmt_bind_param($iStmt, 'iii', $businessId, $roleId, $pId);
-                    mysqli_stmt_execute($iStmt);
-                }
-            }
+            replaceRolePermissions($conn, $businessId, $roleId, $selected_perms);
 
             writeAuditLog($conn, $businessId, 'BUSINESS_ROLE_PERMISSIONS_UPDATED', 'business_role', $roleId, [
                 'role_id' => $roleId,
@@ -311,8 +469,10 @@ switch ($action) {
 
             mysqli_commit($conn);
             setFlashMessage('success', 'Role privileges updated successfully.');
+            header('Location: ' . roleDetailsRedirect($roleId));
+            exit();
 
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             mysqli_rollback($conn);
             error_log("Failed to update role permissions: " . $e->getMessage());
             setFlashMessage('error', 'Failed to save role privileges.');

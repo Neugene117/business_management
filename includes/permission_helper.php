@@ -28,6 +28,8 @@ function hasPermission($conn, $membershipId, $businessId, $permissionCode): bool
             'purchases.create',
             'inventory.view',
             'employees.view',
+            'leave.self.view',
+            'leave.self.create',
             'settings.view'
         ];
         return in_array($permissionCode, $employeePermissions, true);

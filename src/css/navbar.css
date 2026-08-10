@@ -201,15 +201,28 @@
   transform: scale(0.92);
 }
 
-.notif-dot {
+.notif-count {
   position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 6px;
-  height: 6px;
+  top: -6px;
+  right: -7px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
   background: var(--red);
-  border-radius: 50%;
+  color: #fff;
+  border-radius: 999px;
   box-shadow: 0 0 0 2px var(--card);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.2px;
+}
+
+.notif-count[hidden] {
+  display: none;
 }
 
 /* --- Profile Dropdown --- */
@@ -419,6 +432,9 @@
 /* --- Notifications Dropdown --- */
 #notifDropdown {
   display: none;
+  width: min(380px, calc(100vw - 24px));
+  max-height: 460px;
+  flex-direction: column;
 }
 
 #notifDropdown.open {
@@ -428,16 +444,63 @@
 .notif-list {
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  max-height: 380px;
+  overscroll-behavior: contain;
+}
+
+.notif-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--table-hover);
+}
+
+.notif-subtitle {
+  margin-top: 2px;
+  color: var(--text3);
+  font-size: 10px;
+}
+
+.notif-mark-all {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 5px 8px;
+  background: transparent;
+  color: var(--blue);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.notif-mark-all:hover:not(:disabled) {
+  background: var(--blue-bg);
+}
+
+.notif-mark-all:disabled {
+  color: var(--text3);
+  cursor: default;
+  opacity: 0.65;
 }
 
 .notif-item {
+  width: 100%;
   display: flex;
   align-items: flex-start;
   gap: 10px;
   padding: 12px 14px;
+  border: 0;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   background: var(--card);
+  color: inherit;
+  font: inherit;
+  text-align: left;
   transition: background 0.15s ease;
 }
 
@@ -450,7 +513,7 @@
 }
 
 .notif-item.unread:hover {
-  background: #def0ff; /* slightly darker tint on hover for unread */
+  background: var(--table-hover);
 }
 
 .notif-item:last-child {
@@ -508,6 +571,16 @@
   line-height: 1.35;
 }
 
+.notif-message {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text2);
+  font-size: 10.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .notif-item.unread .notif-title {
   font-weight: 600;
 }
@@ -535,4 +608,3 @@
   fill: none;
   stroke-width: 1.5;
 }
-

@@ -4,6 +4,10 @@ require_once __DIR__ . '/../../includes/header.php';
 
 $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
+$approvalBusinessId = $_SESSION['active_business_id'] ?? null;
+$canApproveBusiness = hasPermission($conn, $_SESSION['membership_id'] ?? null, $approvalBusinessId, $permissions['approve']);
+$canRejectBusiness = hasPermission($conn, $_SESSION['membership_id'] ?? null, $approvalBusinessId, $permissions['reject']);
+$canSuspendBusiness = hasPermission($conn, $_SESSION['membership_id'] ?? null, $approvalBusinessId, $permissions['suspend']);
 
 // Fetch list of businesses (using server-side pagination)
 $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
@@ -187,27 +191,35 @@ $csrfToken = generateCsrfToken();
 
                 <!-- Status Action Buttons (only show permitted actions) -->
                 <?php if ($row['approval_status'] === 'PENDING'): ?>
+                  <?php if ($canApproveBusiness): ?>
                   <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to APPROVE this business?');">
                     <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
                     <input type="hidden" name="action" value="approve">
                     <input type="hidden" name="business_id" value="<?php echo (int)$row['id']; ?>">
                     <button type="submit" class="btn-action approve" style="padding: 4px 8px; font-size: 11px;">Approve</button>
                   </form>
+                  <?php endif; ?>
+                  <?php if ($canRejectBusiness): ?>
                   <button class="btn-action reject" style="padding: 4px 8px; font-size: 11px;" onclick="triggerReject(<?php echo (int)$row['id']; ?>)">Reject</button>
+                  <?php endif; ?>
                 <?php elseif ($row['approval_status'] === 'APPROVED'): ?>
+                  <?php if ($canSuspendBusiness): ?>
                   <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to SUSPEND this business?');">
                     <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
                     <input type="hidden" name="action" value="suspend">
                     <input type="hidden" name="business_id" value="<?php echo (int)$row['id']; ?>">
                     <button type="submit" class="btn-action reject" style="padding: 4px 8px; font-size: 11px; opacity: 0.8;">Suspend</button>
                   </form>
+                  <?php endif; ?>
                 <?php elseif ($row['approval_status'] === 'SUSPENDED'): ?>
+                  <?php if ($canSuspendBusiness): ?>
                   <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to REACTIVATE this suspended business?');">
                     <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
                     <input type="hidden" name="action" value="reactivate">
                     <input type="hidden" name="business_id" value="<?php echo (int)$row['id']; ?>">
                     <button type="submit" class="btn-action approve" style="padding: 4px 8px; font-size: 11px;">Reactivate</button>
                   </form>
+                  <?php endif; ?>
                 <?php endif; ?>
               </div>
             </td>
@@ -303,6 +315,7 @@ $csrfToken = generateCsrfToken();
 <!-- ==========================================
      MODAL: REJECTION REASON
      ========================================== -->
+<?php if ($canRejectBusiness): ?>
 <div class="modal-overlay" id="rejectModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -332,6 +345,7 @@ $csrfToken = generateCsrfToken();
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <script>
 function showDetails(biz) {
@@ -370,7 +384,7 @@ function closeReject() {
 document.getElementById('inspectModalOverlay').addEventListener('click', function(e) {
   if (e.target === this) closeInspect();
 });
-document.getElementById('rejectModalOverlay').addEventListener('click', function(e) {
+document.getElementById('rejectModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeReject();
 });
 </script>

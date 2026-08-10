@@ -13,27 +13,27 @@ if (isset($_SESSION['user_id'])) {
 }
 
 $error = '';
-$email = '';
+$identifier = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Validate CSRF
     validateCsrfToken($_POST['csrf_token'] ?? '');
 
-    $email = isset($_POST['email']) ? trim($_POST['email']) : '';
+    $identifier = isset($_POST['identifier']) ? trim($_POST['identifier']) : '';
     $password = isset($_POST['password']) ? $_POST['password'] : '';
 
-    if (empty($email) || empty($password)) {
-        $error = 'Please enter both email and password.';
+    if (empty($identifier) || empty($password)) {
+        $error = 'Please enter your phone number or email address and password.';
     } else {
-        // Query users by email
+        // Query users by either email address or phone number.
         $query = "
             SELECT u.*
             FROM users u
-            WHERE u.email = ? 
+            WHERE LOWER(u.email) = LOWER(?) OR u.phone = ?
             LIMIT 1
         ";
         $stmt = mysqli_prepare($conn, $query);
-        mysqli_stmt_bind_param($stmt, 's', $email);
+        mysqli_stmt_bind_param($stmt, 'ss', $identifier, $identifier);
         mysqli_stmt_execute($stmt);
         $result = mysqli_stmt_get_result($stmt);
 
@@ -60,12 +60,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     session_regenerate_id(true);
                     $_SESSION['user_id'] = $userId;
                     $_SESSION['email'] = $row['email'];
+                    $_SESSION['phone'] = $row['phone'];
                     $_SESSION['first_name'] = $row['first_name'];
                     $_SESSION['last_name'] = $row['last_name'];
                     $_SESSION['platform_context'] = 'SUPER_ADMIN';
                     
                     // Log audit event
-                    writeAuditLog($conn, null, 'PLATFORM_LOGIN_SUCCESS', 'user', $userId, ['email' => $email]);
+                    writeAuditLog($conn, null, 'PLATFORM_LOGIN_SUCCESS', 'user', $userId, ['login_identifier_type' => str_contains($identifier, '@') ? 'EMAIL' : 'PHONE']);
                     
                     // Redirect to dashboard with role override if wanted or normal
                     header("Location: pages/dashboard/index.php");
@@ -125,6 +126,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             session_regenerate_id(true);
                             $_SESSION['user_id'] = $userId;
                             $_SESSION['email'] = $row['email'];
+                            $_SESSION['phone'] = $row['phone'];
                             $_SESSION['first_name'] = $row['first_name'];
                             $_SESSION['last_name'] = $row['last_name'];
                             $_SESSION['active_business_id'] = $membership['business_id'];
@@ -139,7 +141,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             mysqli_stmt_execute($ulStmt);
 
                             // Log audit event
-                            writeAuditLog($conn, $membership['business_id'], 'BUSINESS_LOGIN_SUCCESS', 'user', $userId, ['email' => $email]);
+                            writeAuditLog($conn, $membership['business_id'], 'BUSINESS_LOGIN_SUCCESS', 'user', $userId, ['login_identifier_type' => str_contains($identifier, '@') ? 'EMAIL' : 'PHONE']);
 
                             header("Location: pages/dashboard/index.php");
                             exit();
@@ -149,10 +151,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             } else {
-                $error = 'Invalid email or password.';
+                $error = 'Invalid phone number/email or password.';
             }
         } else {
-            $error = 'Invalid email or password.';
+            $error = 'Invalid phone number/email or password.';
         }
     }
     
@@ -202,10 +204,10 @@ $csrfToken = generateCsrfToken();
         <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
 
         <div class="field">
-          <label for="email">Email address</label>
+          <label for="identifier">Phone number or email address</label>
           <div class="field-wrap">
             <svg class="field-icon" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            <input type="email" name="email" id="email" placeholder="admin@bm.rw" value="<?php echo e($email); ?>" required autocomplete="email">
+            <input type="text" name="identifier" id="identifier" placeholder="+250788000000 or name@example.com" value="<?php echo e($identifier); ?>" required autocomplete="username">
           </div>
         </div>
 

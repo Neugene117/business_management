@@ -1,7 +1,7 @@
 <?php
 return [
-    'view'   => 'purchases.view',
-    'create' => 'purchases.create',
-    'update' => 'purchases.update'
+    'view'   => 'suppliers.view',
+    'create' => 'suppliers.create',
+    'update' => 'suppliers.update'
 ];
 ?>

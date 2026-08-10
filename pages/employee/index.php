@@ -66,8 +66,12 @@ mysqli_stmt_bind_param($stmt, $types_limit, ...$params_limit);
 mysqli_stmt_execute($stmt);
 $result = mysqli_stmt_get_result($stmt);
 
-// Fetch business roles for dropdown list
-$roleQuery = "SELECT id, name FROM business_roles WHERE business_id = ? ORDER BY name ASC";
+// Only the effective Super Admin may assign the protected Owner role.
+$roleQuery = "SELECT id, name FROM business_roles WHERE business_id = ?";
+if (!isEffectiveSuperAdmin()) {
+    $roleQuery .= " AND UPPER(code) <> 'OWNER' AND LOWER(name) <> 'owner'";
+}
+$roleQuery .= " ORDER BY name ASC";
 $rStmt = mysqli_prepare($conn, $roleQuery);
 mysqli_stmt_bind_param($rStmt, 'i', $businessId);
 mysqli_stmt_execute($rStmt);
@@ -78,14 +82,19 @@ while ($rRow = mysqli_fetch_assoc($rolesResult)) {
 }
 
 $csrfToken = generateCsrfToken();
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$role_query = getRolePreviewQuery();
+$canCreateEmployee = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['create']);
+$canUpdateEmployee = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
+$canSuspendEmployee = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['suspend']);
 ?>
 <div>
   <!-- Left: Roster List -->
   <div class="card">
     <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
       <div class="card-title">Employee Roster Directory</div>
-      <button class="btn-primary" onclick="openAddModal()">+ Add Employee</button>
+      <?php if ($canCreateEmployee): ?>
+        <button class="btn-primary" onclick="openAddModal()">+ Add Employee</button>
+      <?php endif; ?>
     </div>
     <table class="data-table">
       <thead>
@@ -129,7 +138,9 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
                 <?php endif; ?>
               </td>
               <td style="text-align: right;">
-                <button class="btn-sm" onclick="showEdit(<?php echo htmlspecialchars(json_encode($row)); ?>)">Edit</button>
+                <?php if ($canUpdateEmployee): ?>
+                  <button class="btn-sm" onclick="showEdit(<?php echo htmlspecialchars(json_encode($row)); ?>)">Edit</button>
+                <?php endif; ?>
               </td>
             </tr>
           <?php endwhile; ?>
@@ -163,6 +174,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
 <!-- ==========================================
      MODAL: ADD EMPLOYEE
      ========================================== -->
+<?php if ($canCreateEmployee): ?>
 <div class="modal-overlay" id="addModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -179,13 +191,6 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
         <input type="hidden" name="action" value="create">
 
         <div class="field" style="margin-bottom: 12px;">
-          <label for="emp_num">Employee Code <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="text" name="employee_number" id="emp_num" placeholder="e.g. EMP-0004" required>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
           <label for="f_name">First Name <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
             <input type="text" name="first_name" id="f_name" placeholder="Eric" required>
@@ -200,13 +205,6 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
         </div>
 
         <div class="field" style="margin-bottom: 12px;">
-          <label for="emp_email">Login Email <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="email" name="email" id="emp_email" placeholder="eric@company.com" required autocomplete="username">
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
           <label for="emp_phone">Contact Phone <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
             <input type="tel" name="phone" id="emp_phone" placeholder="+250788000000" required>
@@ -217,27 +215,6 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
           <label for="emp_pw">Login Password <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
             <input type="password" name="password" id="emp_pw" placeholder="Min 8 characters" required autocomplete="new-password">
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="j_title">Job Title</label>
-          <div class="field-wrap">
-            <input type="text" name="job_title" id="j_title" placeholder="Storekeeper">
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="dept">Department</label>
-          <div class="field-wrap">
-            <input type="text" name="department" id="dept" placeholder="Inventory">
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="h_date">Hire Date</label>
-          <div class="field-wrap">
-            <input type="date" name="hire_date" id="h_date" value="<?php echo date('Y-m-d'); ?>">
           </div>
         </div>
 
@@ -274,10 +251,12 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- ==========================================
      MODAL: EDIT EMPLOYEE
      ========================================== -->
+<?php if ($canUpdateEmployee): ?>
 <div class="modal-overlay" id="editModalOverlay">
   <div class="modal-content-card modal-sm">
     <div class="modal-header">
@@ -329,6 +308,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
           </div>
         </div>
 
+        <?php if ($canSuspendEmployee): ?>
         <div class="field" style="margin-bottom: 12px;">
           <label for="edit_status">Membership Status <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
@@ -340,6 +320,9 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
             </select>
           </div>
         </div>
+        <?php else: ?>
+          <input type="hidden" name="status" id="edit_status" value="ACTIVE">
+        <?php endif; ?>
 
         <div class="field" style="margin-bottom: 12px;">
           <label for="edit_role_id">Business Role <span style="color:var(--red);">*</span></label>
@@ -373,6 +356,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     </form>
   </div>
 </div>
+<?php endif; ?>
 
 <script>
 function openAddModal() {
@@ -414,15 +398,15 @@ function closeEdit() {
 }
 
 // Close modals when clicking outside
-document.getElementById('addModalOverlay').addEventListener('click', function(e) {
+document.getElementById('addModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeAddModal();
 });
-document.getElementById('editModalOverlay').addEventListener('click', function(e) {
+document.getElementById('editModalOverlay')?.addEventListener('click', function(e) {
   if (e.target === this) closeEdit();
 });
 
 // Safeguard double submissions client-side
-document.getElementById('addEmpForm').addEventListener('submit', function(e) {
+document.getElementById('addEmpForm')?.addEventListener('submit', function(e) {
   const pw = document.getElementById('emp_pw').value;
   if (pw.length < 8) {
     e.preventDefault();
@@ -434,7 +418,7 @@ document.getElementById('addEmpForm').addEventListener('submit', function(e) {
   document.getElementById('addBtn').style.opacity = '0.7';
   document.getElementById('addBtn').textContent = 'Creating Account...';
 });
-document.getElementById('editEmpForm').addEventListener('submit', function() {
+document.getElementById('editEmpForm')?.addEventListener('submit', function() {
   document.getElementById('updateBtn').disabled = true;
   document.getElementById('updateBtn').style.opacity = '0.7';
   document.getElementById('updateBtn').textContent = 'Updating Account...';

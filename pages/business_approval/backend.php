@@ -168,6 +168,16 @@ switch ($action) {
                 'approved_by_user_id' => $_SESSION['user_id']
             ]);
 
+            createUserNotification(
+                $conn,
+                (int)$ownerUserId,
+                $businessId,
+                'Business registration approved',
+                'Your business registration has been approved and is ready to use.',
+                'SUCCESS',
+                'pages/dashboard/index.php'
+            );
+
             mysqli_commit($conn);
             setFlashMessage('success', 'Business registration approved successfully.');
 
@@ -237,6 +247,16 @@ switch ($action) {
                 'rejected_by_user_id' => $_SESSION['user_id'],
                 'reason' => $reason
             ]);
+
+            createUserNotification(
+                $conn,
+                (int)$ownerUserId,
+                $businessId,
+                'Business registration rejected',
+                $reason,
+                'WARNING',
+                null
+            );
 
             mysqli_commit($conn);
             setFlashMessage('success', 'Business registration rejected.');

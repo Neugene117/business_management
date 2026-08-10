@@ -10,6 +10,18 @@ requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_b
 $user_role = getEffectiveUserRole();
 $role_query = getRolePreviewQuery();
 $businessId = $_SESSION['active_business_id'] ?? 0;
+$dashboardMembershipId = $_SESSION['membership_id'] ?? null;
+$canViewBusinessApprovals = hasPermission($conn, $dashboardMembershipId, $businessId, 'platform.businesses.view');
+$canViewSales = hasPermission($conn, $dashboardMembershipId, $businessId, 'sales.view');
+$canCreateSales = hasPermission($conn, $dashboardMembershipId, $businessId, 'sales.create');
+$canViewPurchases = hasPermission($conn, $dashboardMembershipId, $businessId, 'purchases.view');
+$canCreatePurchases = hasPermission($conn, $dashboardMembershipId, $businessId, 'purchases.create');
+$canViewEmployees = hasPermission($conn, $dashboardMembershipId, $businessId, 'employees.view');
+$canViewLeave = hasPermission($conn, $dashboardMembershipId, $businessId, 'leave.self.view')
+    || hasPermission($conn, $dashboardMembershipId, $businessId, 'leave.team.view');
+$canSubmitLeave = hasPermission($conn, $dashboardMembershipId, $businessId, 'leave.self.create');
+$canViewReports = hasPermission($conn, $dashboardMembershipId, $businessId, 'reports.view');
+$canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit.view');
 ?>
 
 <div class="dashboard-header" style="margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
@@ -44,7 +56,7 @@ $businessId = $_SESSION['active_business_id'] ?? 0;
   $pCountResult = mysqli_query($conn, $pCountQuery);
   $pCount = mysqli_fetch_assoc($pCountResult)['pending'] ?? 0;
   ?>
-  <?php if ($pCount > 0): ?>
+  <?php if ($canViewBusinessApprovals && $pCount > 0): ?>
     <div class="alert-msg warning" id="notice-banner" style="margin-bottom: 24px;">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
       <span>There are <strong><?php echo (int)$pCount; ?> pending business registrations</strong> waiting for approval. <a href="../business_approval/index.php<?php echo $role_query; ?>" style="font-weight: 600; color: inherit; text-decoration: underline;">Manage approvals now</a></span>
@@ -388,7 +400,9 @@ $businessId = $_SESSION['active_business_id'] ?? 0;
     <div class="card" id="recent-sales">
       <div class="card-header">
         <div class="card-title">Recent Sales</div>
-        <a class="btn-sm" style="text-decoration:none;" href="../sale/index.php<?php echo $role_query; ?>">View Sales</a>
+        <?php if ($canViewSales): ?>
+          <a class="btn-sm" style="text-decoration:none;" href="../sale/index.php<?php echo $role_query; ?>">View Sales</a>
+        <?php endif; ?>
       </div>
       <table class="data-table">
         <thead>
@@ -434,7 +448,9 @@ $businessId = $_SESSION['active_business_id'] ?? 0;
     <div class="card" id="recent-purchases">
       <div class="card-header">
         <div class="card-title">Recent Purchases</div>
-        <a class="btn-sm" style="text-decoration:none;" href="../purchase/index.php<?php echo $role_query; ?>">View Purchases</a>
+        <?php if ($canViewPurchases): ?>
+          <a class="btn-sm" style="text-decoration:none;" href="../purchase/index.php<?php echo $role_query; ?>">View Purchases</a>
+        <?php endif; ?>
       </div>
       <table class="data-table">
         <thead>
@@ -482,7 +498,9 @@ $businessId = $_SESSION['active_business_id'] ?? 0;
     <div class="card" id="leave-requests">
       <div class="card-header">
         <div class="card-title">Pending Leave Requests</div>
-        <a class="btn-sm" style="text-decoration:none;" href="../leave/index.php<?php echo $role_query; ?>">Manage Leaves</a>
+        <?php if ($canViewLeave): ?>
+          <a class="btn-sm" style="text-decoration:none;" href="../leave/index.php<?php echo $role_query; ?>">Manage Leaves</a>
+        <?php endif; ?>
       </div>
       <table class="data-table">
         <thead>
@@ -532,7 +550,9 @@ $businessId = $_SESSION['active_business_id'] ?? 0;
       <div class="card-header"><div class="card-title">Business Reports Center</div></div>
       <div style="display:flex; flex-direction:column; gap:12px; padding: 10px 0;">
         <p style="font-size:12px; color:var(--text3);">Select an app card in the APPS menu grid (shortcut ESC) to access and generate ledger journals, PDF invoices, and P&L sheets.</p>
-        <a class="btn-primary" style="text-align:center; padding:10px; text-decoration:none;" href="../report/index.php<?php echo $role_query; ?>">Go to Reports module</a>
+        <?php if ($canViewReports): ?>
+          <a class="btn-primary" style="text-align:center; padding:10px; text-decoration:none;" href="../report/index.php<?php echo $role_query; ?>">Go to Reports module</a>
+        <?php endif; ?>
       </div>
     </div>
   </div>
@@ -541,10 +561,10 @@ $businessId = $_SESSION['active_business_id'] ?? 0;
      ROLE: EMPLOYEE DASHBOARD
      ========================================== -->
 <?php elseif ($user_role === 'employee'): ?>
-  
+  <?php $empMembershipId = $_SESSION['membership_id'] ?? 0; ?>
+  <?php if ($canViewSales): ?>
   <div class="stats-grid-8" style="margin-bottom: 24px;">
     <?php
-    $empMembershipId = $_SESSION['membership_id'] ?? 0;
     // Logged sales count
     $salesCountQ = "SELECT COUNT(*) as scount, SUM(total_amount) as stotal FROM sales WHERE business_id = ? AND cashier_membership_id = ?";
     $scStmt = mysqli_prepare($conn, $salesCountQ);
@@ -563,17 +583,27 @@ $businessId = $_SESSION['active_business_id'] ?? 0;
       <div class="stat-card-desc">Total revenue logged</div>
     </div>
   </div>
+  <?php endif; ?>
 
   <div class="dashboard-split-grid">
+    <?php if ($canCreateSales || $canCreatePurchases || $canSubmitLeave): ?>
     <div class="card">
       <div class="card-header"><div class="card-title">Quick Operations Tasks</div></div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; padding: 12px 0;">
-        <a class="btn-primary" style="text-decoration:none; text-align:center; padding:10px;" href="../sale/index.php<?php echo $role_query; ?>">Record a Customer Sale</a>
-        <a class="btn-primary" style="text-decoration:none; text-align:center; padding:10px; background:var(--green);" href="../purchase/index.php<?php echo $role_query; ?>">Log Purchase Lot Recpt</a>
-        <a class="btn-sm" style="text-decoration:none; text-align:center; padding:10px; background:var(--bg); border:1px solid var(--border); color:var(--text);" href="../leave/index.php<?php echo $role_query; ?>">Submit Leave Request</a>
+        <?php if ($canCreateSales): ?>
+          <a class="btn-primary" style="text-decoration:none; text-align:center; padding:10px;" href="../sale/index.php<?php echo $role_query; ?>">Record a Customer Sale</a>
+        <?php endif; ?>
+        <?php if ($canCreatePurchases): ?>
+          <a class="btn-primary" style="text-decoration:none; text-align:center; padding:10px; background:var(--green);" href="../purchase/index.php<?php echo $role_query; ?>">Log Purchase Lot Recpt</a>
+        <?php endif; ?>
+        <?php if ($canSubmitLeave): ?>
+          <a class="btn-sm" style="text-decoration:none; text-align:center; padding:10px; background:var(--bg); border:1px solid var(--border); color:var(--text);" href="../leave/index.php<?php echo $role_query; ?>">Submit Leave Request</a>
+        <?php endif; ?>
       </div>
     </div>
+    <?php endif; ?>
     
+    <?php if ($canViewAudit): ?>
     <div class="card">
       <div class="card-header"><div class="card-title">My Recent Activity Log</div></div>
       <table class="data-table">
@@ -615,6 +645,7 @@ $businessId = $_SESSION['active_business_id'] ?? 0;
         </tbody>
       </table>
     </div>
+    <?php endif; ?>
   </div>
 
 <?php endif; ?>

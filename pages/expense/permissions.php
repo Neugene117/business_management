@@ -2,8 +2,7 @@
 return [
     'view'   => 'expenses.view',
     'create' => 'expenses.create',
-    'update' => 'expenses.update',
-    'post'   => 'expenses.post',
+    'post'   => 'expenses.approve',
     'void'   => 'expenses.void'
 ];
 ?>

@@ -78,6 +78,16 @@ switch ($action) {
                 'start_date' => $start_date,
                 'end_date' => $end_date
             ]);
+            $requesterName = trim(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? ''));
+            notifyBusinessOwners(
+                $conn,
+                $businessId,
+                'New leave request',
+                ($requesterName !== '' ? $requesterName : 'An employee') . ' requested ' . $ltRow['name'] . ' from ' . $start_date . ' to ' . $end_date . '.',
+                'INFO',
+                'pages/leave/index.php',
+                (int)($_SESSION['user_id'] ?? 0)
+            );
             setFlashMessage('success', 'Leave request submitted successfully.');
         } else {
             setFlashMessage('error', 'Failed to submit leave request.');
@@ -102,11 +112,19 @@ switch ($action) {
         ";
         $stmt = mysqli_prepare($conn, $query);
         mysqli_stmt_bind_param($stmt, 'iii', $_SESSION['membership_id'], $leaveId, $businessId);
-        if (mysqli_stmt_execute($stmt)) {
+        if (mysqli_stmt_execute($stmt) && mysqli_stmt_affected_rows($stmt) > 0) {
             writeAuditLog($conn, $businessId, 'LEAVE_REQUEST_APPROVED', 'leave_request', $leaveId, ['status' => 'APPROVED']);
+            $requestQuery = "SELECT membership_id FROM leave_requests WHERE id = ? AND business_id = ? LIMIT 1";
+            $requestStmt = mysqli_prepare($conn, $requestQuery);
+            mysqli_stmt_bind_param($requestStmt, 'ii', $leaveId, $businessId);
+            mysqli_stmt_execute($requestStmt);
+            $requestRow = mysqli_fetch_assoc(mysqli_stmt_get_result($requestStmt));
+            if ($requestRow) {
+                createMembershipNotification($conn, (int)$requestRow['membership_id'], $businessId, 'Leave request approved', 'Your leave request has been approved.', 'SUCCESS', 'pages/leave/index.php');
+            }
             setFlashMessage('success', 'Leave request approved.');
         } else {
-            setFlashMessage('error', 'Failed to approve leave request.');
+            setFlashMessage('error', 'The leave request could not be approved or was already processed.');
         }
         header("Location: index.php" . $role_query);
         exit();
@@ -130,14 +148,22 @@ switch ($action) {
         ";
         $stmt = mysqli_prepare($conn, $query);
         mysqli_stmt_bind_param($stmt, 'isii', $_SESSION['membership_id'], $decision_note, $leaveId, $businessId);
-        if (mysqli_stmt_execute($stmt)) {
+        if (mysqli_stmt_execute($stmt) && mysqli_stmt_affected_rows($stmt) > 0) {
             writeAuditLog($conn, $businessId, 'LEAVE_REQUEST_REJECTED', 'leave_request', $leaveId, [
                 'status' => 'REJECTED',
                 'decision_note' => $decision_note
             ]);
+            $requestQuery = "SELECT membership_id FROM leave_requests WHERE id = ? AND business_id = ? LIMIT 1";
+            $requestStmt = mysqli_prepare($conn, $requestQuery);
+            mysqli_stmt_bind_param($requestStmt, 'ii', $leaveId, $businessId);
+            mysqli_stmt_execute($requestStmt);
+            $requestRow = mysqli_fetch_assoc(mysqli_stmt_get_result($requestStmt));
+            if ($requestRow) {
+                createMembershipNotification($conn, (int)$requestRow['membership_id'], $businessId, 'Leave request rejected', $decision_note, 'WARNING', 'pages/leave/index.php');
+            }
             setFlashMessage('success', 'Leave request rejected.');
         } else {
-            setFlashMessage('error', 'Failed to reject leave request.');
+            setFlashMessage('error', 'The leave request could not be rejected or was already processed.');
         }
         header("Location: index.php" . $role_query);
         exit();
