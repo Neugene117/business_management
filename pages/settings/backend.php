@@ -26,10 +26,75 @@ $businessId = $_SESSION['active_business_id'];
 $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
 
 switch ($action) {
+    case 'update_company_identity':
+        requirePermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
+
+        if (!isBusinessOwner()) {
+            setFlashMessage('error', 'Only the Business Owner can update company information.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+
+        $businessName = trim($_POST['business_name'] ?? '');
+        $businessNameLength = function_exists('mb_strlen') ? mb_strlen($businessName) : strlen($businessName);
+        if ($businessName === '' || $businessNameLength > 200) {
+            setFlashMessage('error', 'Enter a company name no longer than 200 characters.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+
+        $ownerUserId = (int)($_SESSION['user_id'] ?? 0);
+        $oldQuery = "SELECT business_name, company_logo_path FROM businesses WHERE id = ? AND created_by_user_id = ? LIMIT 1";
+        $oldStmt = mysqli_prepare($conn, $oldQuery);
+        mysqli_stmt_bind_param($oldStmt, 'ii', $businessId, $ownerUserId);
+        mysqli_stmt_execute($oldStmt);
+        $oldCompany = mysqli_fetch_assoc(mysqli_stmt_get_result($oldStmt));
+        if (!$oldCompany) {
+            setFlashMessage('error', 'Company information is unavailable for this owner account.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+
+        $logoUpload = storeCompanyLogoUpload($_FILES['company_logo'] ?? null, (int)$businessId);
+        if (!$logoUpload['ok']) {
+            setFlashMessage('error', $logoUpload['error']);
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+        $companyLogoPath = $logoUpload['uploaded'] ? $logoUpload['path'] : $oldCompany['company_logo_path'];
+
+        $updateQuery = "
+            UPDATE businesses
+            SET business_name = ?, company_logo_path = ?, updated_at = NOW(6)
+            WHERE id = ? AND created_by_user_id = ?
+        ";
+        $updateStmt = mysqli_prepare($conn, $updateQuery);
+        $companyUpdated = false;
+        if ($updateStmt) {
+            mysqli_stmt_bind_param($updateStmt, 'ssii', $businessName, $companyLogoPath, $businessId, $ownerUserId);
+            $companyUpdated = mysqli_stmt_execute($updateStmt);
+        }
+        if ($companyUpdated) {
+            writeAuditLog($conn, $businessId, 'COMPANY_INFORMATION_UPDATED', 'business', $businessId, [
+                'business_name' => $businessName,
+                'company_logo_changed' => (bool)$logoUpload['uploaded']
+            ], $oldCompany);
+            if ($logoUpload['uploaded'] && !empty($oldCompany['company_logo_path'])) {
+                deleteCompanyLogoFile($oldCompany['company_logo_path']);
+            }
+            setFlashMessage('success', 'Company information updated successfully.');
+        } else {
+            if ($logoUpload['uploaded']) {
+                deleteCompanyLogoFile($logoUpload['path']);
+            }
+            setFlashMessage('error', 'Failed to update company information.');
+        }
+        header("Location: index.php" . $role_query);
+        exit();
+
     case 'update_profile':
         requirePermission($conn, $_SESSION['membership_id'], $businessId, $permissions['update']);
 
-        $business_name = trim($_POST['business_name'] ?? '');
         $legal_name = trim($_POST['legal_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
         $email = strtolower(trim($_POST['email'] ?? ''));
@@ -40,7 +105,7 @@ switch ($action) {
         $address_line1 = trim($_POST['address_line1'] ?? '');
         $summary = trim($_POST['summary'] ?? '');
 
-        if (empty($business_name) || empty($phone) || empty($email) || empty($city) || empty($address_line1) || empty($summary)) {
+        if (empty($phone) || empty($email) || empty($city) || empty($address_line1) || empty($summary)) {
             setFlashMessage('error', 'All marked fields (*) are required.');
             header("Location: index.php" . $role_query);
             exit();
@@ -55,7 +120,7 @@ switch ($action) {
 
         $query = "
             UPDATE businesses 
-            SET business_name = ?, legal_name = ?, phone = ?, email = ?, 
+            SET legal_name = ?, phone = ?, email = ?,
                 tax_number = ?, registration_number = ?, country_code = ?, 
                 city = ?, address_line1 = ?, summary = ?, updated_at = NOW(6)
             WHERE id = ?
@@ -63,15 +128,14 @@ switch ($action) {
         $stmt = mysqli_prepare($conn, $query);
         mysqli_stmt_bind_param(
             $stmt,
-            'ssssssssssi',
-            $business_name, $legal_name, $phone, $email,
+            'sssssssssi',
+            $legal_name, $phone, $email,
             $tax_number, $registration_number, $country_code,
             $city, $address_line1, $summary, $businessId
         );
 
         if (mysqli_stmt_execute($stmt)) {
             writeAuditLog($conn, $businessId, 'BUSINESS_PROFILE_UPDATED', 'business', $businessId, [
-                'business_name' => $business_name,
                 'legal_name' => $legal_name,
                 'phone' => $phone,
                 'email' => $email

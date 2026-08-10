@@ -115,6 +115,7 @@ CREATE TABLE `businesses` (
   `id` bigint(20) UNSIGNED NOT NULL,
   `public_id` char(36) NOT NULL,
   `business_name` varchar(200) NOT NULL,
+  `company_logo_path` varchar(500) DEFAULT NULL,
   `legal_name` varchar(200) DEFAULT NULL,
   `phone` varchar(32) NOT NULL,
   `email` varchar(254) DEFAULT NULL,
@@ -143,9 +144,9 @@ CREATE TABLE `businesses` (
 -- Dumping data for table `businesses`
 --
 
-INSERT INTO `businesses` (`id`, `public_id`, `business_name`, `legal_name`, `phone`, `email`, `summary`, `registration_number`, `tax_number`, `country_code`, `currency_code`, `timezone`, `address_line1`, `address_line2`, `city`, `state_region`, `postal_code`, `approval_status`, `submitted_at`, `approved_at`, `rejected_at`, `approved_by_user_id`, `created_by_user_id`, `created_at`, `updated_at`) VALUES
-(1, '11111111-1111-4111-8111-111111111111', 'Kigali Retail Hub', 'Kigali Retail Hub Ltd', '+250788555100', 'info@kigaliretail.demo', 'Demo multi-user retail business used for development, QA, stock, sales and reporting tests.', 'DEMO-RDB-2026-001', 'TIN-DEMO-100001', 'RW', 'RWF', 'Africa/Kigali', 'KN 5 Road', NULL, 'Kigali', 'Kigali City', NULL, 'APPROVED', '2026-08-01 08:20:00.000000', '2026-08-01 08:30:00.000000', NULL, 1, 2, '2026-08-08 13:06:11.793938', '2026-08-08 13:06:11.793938'),
-(2, '22222222-2222-4222-8222-222222222222', 'Pending Demo Boutique', NULL, '+250788555200', 'pending.business@demo.local', 'Business waiting for Super Admin approval.', 'DEMO-RDB-2026-PENDING', NULL, 'RW', 'RWF', 'Africa/Kigali', NULL, NULL, 'Musanze', NULL, NULL, 'PENDING', '2026-08-08 08:00:00.000000', NULL, NULL, NULL, 6, '2026-08-08 13:06:11.836942', '2026-08-08 13:06:11.836942');
+INSERT INTO `businesses` (`id`, `public_id`, `business_name`, `company_logo_path`, `legal_name`, `phone`, `email`, `summary`, `registration_number`, `tax_number`, `country_code`, `currency_code`, `timezone`, `address_line1`, `address_line2`, `city`, `state_region`, `postal_code`, `approval_status`, `submitted_at`, `approved_at`, `rejected_at`, `approved_by_user_id`, `created_by_user_id`, `created_at`, `updated_at`) VALUES
+(1, '11111111-1111-4111-8111-111111111111', 'Kigali Retail Hub', NULL, 'Kigali Retail Hub Ltd', '+250788555100', 'info@kigaliretail.demo', 'Demo multi-user retail business used for development, QA, stock, sales and reporting tests.', 'DEMO-RDB-2026-001', 'TIN-DEMO-100001', 'RW', 'RWF', 'Africa/Kigali', 'KN 5 Road', NULL, 'Kigali', 'Kigali City', NULL, 'APPROVED', '2026-08-01 08:20:00.000000', '2026-08-01 08:30:00.000000', NULL, 1, 2, '2026-08-08 13:06:11.793938', '2026-08-08 13:06:11.793938'),
+(2, '22222222-2222-4222-8222-222222222222', 'Pending Demo Boutique', NULL, NULL, '+250788555200', 'pending.business@demo.local', 'Business waiting for Super Admin approval.', 'DEMO-RDB-2026-PENDING', NULL, 'RW', 'RWF', 'Africa/Kigali', NULL, NULL, 'Musanze', NULL, NULL, 'PENDING', '2026-08-08 08:00:00.000000', NULL, NULL, NULL, 6, '2026-08-08 13:06:11.836942', '2026-08-08 13:06:11.836942');
 
 -- --------------------------------------------------------
 

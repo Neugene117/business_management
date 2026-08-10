@@ -7,6 +7,7 @@ requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_b
 
 $businessId = $_SESSION['active_business_id'] ?? 0;
 $canUpdateSettings = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
+$canManageCompanyInfo = isBusinessOwner() || getEffectiveUserRole() === 'owner';
 
 // Fetch business details
 $bizQuery = "SELECT * FROM businesses WHERE id = ? LIMIT 1";
@@ -42,9 +43,54 @@ if (!$acct) {
 
 $csrfToken = generateCsrfToken();
 $role_query = getRolePreviewQuery();
+$companyLogoUrl = getCompanyLogoUrl($biz['company_logo_path'] ?? null, getRootPrefix());
 ?>
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start;">
+<section class="card company-information-card">
+  <div class="card-header">
+    <div>
+      <div class="card-title">Company Information Management</div>
+      <p class="company-information-subtitle">Manage the company identity displayed to every user in this business workspace.</p>
+    </div>
+  </div>
+  <form action="backend.php<?php echo e($role_query); ?>" method="POST" enctype="multipart/form-data" class="company-information-form" id="companyIdentityForm">
+    <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
+    <input type="hidden" name="action" value="update_company_identity">
+
+    <div class="company-logo-manager">
+      <div class="company-logo-large" id="settingsCompanyLogoPreview">
+        <?php if ($companyLogoUrl): ?>
+          <img src="<?php echo e($companyLogoUrl); ?>" alt="<?php echo e($biz['business_name']); ?> logo">
+        <?php else: ?>
+          <span><?php echo e(strtoupper(substr($biz['business_name'], 0, 1))); ?></span>
+        <?php endif; ?>
+      </div>
+      <div>
+        <strong>Company Logo</strong>
+        <p>JPG, PNG, or WEBP up to 3 MB. The logo will appear in the system header for every company user.</p>
+        <?php if ($canManageCompanyInfo): ?>
+          <input type="file" name="company_logo" id="settingsCompanyLogo" accept="image/jpeg,image/png,image/webp">
+        <?php endif; ?>
+      </div>
+    </div>
+
+    <div class="company-name-manager field">
+      <label for="company_name">Company Name <span style="color:var(--red);">*</span></label>
+      <div class="field-wrap">
+        <input type="text" name="business_name" id="company_name" value="<?php echo e($biz['business_name']); ?>" required <?php echo $canManageCompanyInfo ? '' : 'readonly'; ?>>
+      </div>
+      <p>This name is shown in the top header for the Business Owner and all employees in this company.</p>
+    </div>
+
+    <?php if ($canManageCompanyInfo): ?>
+      <button type="submit" class="btn-primary company-information-save" id="companyIdentityBtn">Save Company Information</button>
+    <?php else: ?>
+      <div class="company-information-readonly">Company identity can only be changed by the Business Owner.</div>
+    <?php endif; ?>
+  </form>
+</section>
+
+<div class="settings-grid">
   
   <!-- Left Column: Business Profile parameters -->
   <div class="card">
@@ -54,13 +100,6 @@ $role_query = getRolePreviewQuery();
     <form action="backend.php<?php echo $role_query; ?>" method="POST" style="padding: 20px;" id="profileForm">
       <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
       <input type="hidden" name="action" value="update_profile">
-
-      <div class="field" style="margin-bottom: 12px;">
-        <label for="biz_name">Business Name <span style="color:var(--red);">*</span></label>
-        <div class="field-wrap">
-          <input type="text" name="business_name" id="biz_name" value="<?php echo e($biz['business_name']); ?>" required>
-        </div>
-      </div>
 
       <div class="field" style="margin-bottom: 12px;">
         <label for="legal_name">Legal Name / Trade Name</label>
@@ -206,6 +245,38 @@ document.querySelectorAll('#profileForm input:not([type="hidden"]), #profileForm
   element.disabled = true;
 });
 <?php endif; ?>
+
+const settingsCompanyLogo = document.getElementById('settingsCompanyLogo');
+const settingsCompanyLogoPreview = document.getElementById('settingsCompanyLogoPreview');
+if (settingsCompanyLogo) {
+  settingsCompanyLogo.addEventListener('change', function() {
+    const file = settingsCompanyLogo.files[0];
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 3 * 1024 * 1024) {
+      settingsCompanyLogo.value = '';
+      alert('Choose a JPG, PNG, or WEBP company logo no larger than 3 MB.');
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    settingsCompanyLogoPreview.replaceChildren();
+    const image = document.createElement('img');
+    image.src = previewUrl;
+    image.alt = 'Selected company logo';
+    image.onload = function() { URL.revokeObjectURL(previewUrl); };
+    settingsCompanyLogoPreview.appendChild(image);
+  });
+}
+
+const companyIdentityForm = document.getElementById('companyIdentityForm');
+const companyIdentityBtn = document.getElementById('companyIdentityBtn');
+if (companyIdentityForm && companyIdentityBtn) {
+  companyIdentityForm.addEventListener('submit', function() {
+    companyIdentityBtn.disabled = true;
+    companyIdentityBtn.style.opacity = '0.7';
+    companyIdentityBtn.textContent = 'Saving Company Information...';
+  });
+}
+
 // Safeguard double submissions client-side
 document.getElementById('profileForm').addEventListener('submit', function() {
   document.getElementById('profileBtn').disabled = true;

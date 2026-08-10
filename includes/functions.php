@@ -47,6 +47,97 @@ function isPageActive($pageTitle, $targetTitle) {
 }
 
 /**
+ * Validate and store a company logo, returning a safe project-relative path.
+ * An absent upload is valid and returns a null path.
+ */
+function storeCompanyLogoUpload(?array $file, int $businessId): array {
+    if (!$file || ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        return ['ok' => true, 'uploaded' => false, 'path' => null, 'error' => null];
+    }
+
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        return ['ok' => false, 'uploaded' => false, 'path' => null, 'error' => 'The company logo upload did not complete successfully.'];
+    }
+
+    $temporaryPath = (string)($file['tmp_name'] ?? '');
+    $fileSize = (int)($file['size'] ?? 0);
+    if ($temporaryPath === '' || !is_uploaded_file($temporaryPath)) {
+        return ['ok' => false, 'uploaded' => false, 'path' => null, 'error' => 'The uploaded company logo is invalid.'];
+    }
+    if ($fileSize <= 0 || $fileSize > 3 * 1024 * 1024) {
+        return ['ok' => false, 'uploaded' => false, 'path' => null, 'error' => 'The company logo must be a JPG, PNG, or WEBP image no larger than 3 MB.'];
+    }
+
+    $imageInfo = @getimagesize($temporaryPath);
+    $mimeDetector = new finfo(FILEINFO_MIME_TYPE);
+    $mimeType = $mimeDetector->file($temporaryPath);
+    $allowedTypes = [
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp'
+    ];
+    if ($imageInfo === false || !isset($allowedTypes[$mimeType])) {
+        return ['ok' => false, 'uploaded' => false, 'path' => null, 'error' => 'The company logo must be a valid JPG, PNG, or WEBP image.'];
+    }
+
+    $logoDirectory = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'src' . DIRECTORY_SEPARATOR . 'images' . DIRECTORY_SEPARATOR . 'company';
+    if (!is_dir($logoDirectory) && !mkdir($logoDirectory, 0755, true) && !is_dir($logoDirectory)) {
+        return ['ok' => false, 'uploaded' => false, 'path' => null, 'error' => 'The company logo storage directory is unavailable.'];
+    }
+
+    $extension = $allowedTypes[$mimeType];
+    try {
+        $randomSuffix = bin2hex(random_bytes(12));
+    } catch (Throwable $e) {
+        return ['ok' => false, 'uploaded' => false, 'path' => null, 'error' => 'A secure company logo filename could not be generated.'];
+    }
+    $fileName = 'business_' . $businessId . '_' . $randomSuffix . '.' . $extension;
+    $destination = $logoDirectory . DIRECTORY_SEPARATOR . $fileName;
+    if (!move_uploaded_file($temporaryPath, $destination)) {
+        return ['ok' => false, 'uploaded' => false, 'path' => null, 'error' => 'The company logo could not be saved.'];
+    }
+
+    return [
+        'ok' => true,
+        'uploaded' => true,
+        'path' => 'src/images/company/' . $fileName,
+        'error' => null
+    ];
+}
+
+/**
+ * Resolve only application-managed company logo paths for safe rendering.
+ */
+function getCompanyLogoUrl(?string $logoPath, string $rootPrefix = ''): ?string {
+    $logoPath = trim((string)$logoPath);
+    if (!preg_match('#^src/images/company/business_[0-9]+_[a-f0-9]{24}\.(?:jpg|png|webp)$#', $logoPath)) {
+        return null;
+    }
+    $absolutePath = dirname(__DIR__) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $logoPath);
+    return is_file($absolutePath) ? $rootPrefix . $logoPath : null;
+}
+
+/**
+ * Delete only a previously managed company logo file.
+ */
+function deleteCompanyLogoFile(?string $logoPath): void {
+    $logoPath = trim((string)$logoPath);
+    if (!preg_match('#^src/images/company/business_[0-9]+_[a-f0-9]{24}\.(?:jpg|png|webp)$#', $logoPath)) {
+        return;
+    }
+
+    $logoDirectory = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'src' . DIRECTORY_SEPARATOR . 'images' . DIRECTORY_SEPARATOR . 'company';
+    $absolutePath = dirname(__DIR__) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $logoPath);
+    $resolvedDirectory = realpath($logoDirectory);
+    $resolvedFile = realpath($absolutePath);
+    if ($resolvedDirectory !== false && $resolvedFile !== false
+        && str_starts_with($resolvedFile, $resolvedDirectory . DIRECTORY_SEPARATOR)
+        && is_file($resolvedFile)) {
+        unlink($resolvedFile);
+    }
+}
+
+/**
  * Store a notification for one explicit user.
  */
 function createUserNotification($conn, int $userId, ?int $businessId, string $title, ?string $message = null, string $type = 'INFO', ?string $linkUrl = null): bool {

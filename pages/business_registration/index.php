@@ -77,6 +77,62 @@ $csrfToken = generateCsrfToken();
   .btn-submit:hover {
     background: var(--orange-mid);
   }
+  .company-logo-upload {
+    grid-column: span 2;
+    display: grid;
+    grid-template-columns: 76px 1fr;
+    align-items: center;
+    gap: 14px;
+    padding: 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .company-logo-preview {
+    width: 76px;
+    height: 76px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: var(--card);
+    border-radius: var(--radius);
+    color: var(--text3);
+  }
+  .company-logo-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .company-logo-preview svg {
+    width: 28px;
+    height: 28px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+  }
+  .company-logo-upload input[type="file"] {
+    width: 100%;
+    margin-top: 7px;
+    color: var(--text2);
+    font-size: 11.5px;
+  }
+  .company-logo-help {
+    margin: 5px 0 0;
+    color: var(--text3);
+    font-size: 10.5px;
+    line-height: 1.4;
+  }
+  @media (max-width: 600px) {
+    .company-logo-upload {
+      grid-column: span 1;
+      grid-template-columns: 60px 1fr;
+    }
+    .company-logo-preview {
+      width: 60px;
+      height: 60px;
+    }
+  }
   body {
     background: var(--bg);
     min-height: 100vh;
@@ -104,7 +160,7 @@ $csrfToken = generateCsrfToken();
 
   <?php displayFlashMessage(); ?>
 
-  <form action="backend.php" method="POST" id="regForm">
+  <form action="backend.php" method="POST" enctype="multipart/form-data" id="regForm">
     <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
     <input type="hidden" name="action" value="register">
 
@@ -178,6 +234,17 @@ $csrfToken = generateCsrfToken();
         <div class="field-wrap">
           <svg class="field-icon" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
           <input type="text" name="legal_name" id="legal_name" placeholder="Leave blank if same as Business Name">
+        </div>
+      </div>
+
+      <div class="company-logo-upload">
+        <div class="company-logo-preview" id="companyLogoPreview" aria-label="Company logo preview">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+        </div>
+        <div>
+          <label for="company_logo">Company Logo</label>
+          <input type="file" name="company_logo" id="company_logo" accept="image/jpeg,image/png,image/webp">
+          <p class="company-logo-help">Optional. Upload a JPG, PNG, or WEBP image up to 3 MB. A square or landscape logo works best.</p>
         </div>
       </div>
 
@@ -356,6 +423,25 @@ function checkFormValidity() {
 setupLiveValidation('owner_email', 'owner_email', 'feedback_owner_email');
 setupLiveValidation('owner_phone', 'owner_phone', 'feedback_owner_phone');
 setupLiveValidation('registration_number', 'registration_number', 'feedback_reg_num');
+
+const companyLogoInput = document.getElementById('company_logo');
+const companyLogoPreview = document.getElementById('companyLogoPreview');
+companyLogoInput.addEventListener('change', function() {
+  const file = companyLogoInput.files[0];
+  if (!file) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 3 * 1024 * 1024) {
+    companyLogoInput.value = '';
+    alert('Choose a JPG, PNG, or WEBP company logo no larger than 3 MB.');
+    return;
+  }
+  const previewUrl = URL.createObjectURL(file);
+  companyLogoPreview.replaceChildren();
+  const image = document.createElement('img');
+  image.src = previewUrl;
+  image.alt = 'Selected company logo';
+  image.onload = function() { URL.revokeObjectURL(previewUrl); };
+  companyLogoPreview.appendChild(image);
+});
 
 // Prevent double form submission client-side
 document.getElementById('regForm').addEventListener('submit', function(e) {

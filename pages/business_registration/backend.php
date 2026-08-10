@@ -102,6 +102,7 @@ if ($action === 'register') {
     }
 
     // Begin Onboarding Database Transaction
+    $storedLogoPath = null;
     mysqli_begin_transaction($conn);
 
     try {
@@ -183,6 +184,22 @@ if ($action === 'register') {
         }
         $businessId = mysqli_insert_id($conn);
 
+        // 4b. Store and reference the optional company logo only after the
+        // tenant business id exists, so filenames remain tenant-specific.
+        $logoUpload = storeCompanyLogoUpload($_FILES['company_logo'] ?? null, $businessId);
+        if (!$logoUpload['ok']) {
+            throw new RuntimeException($logoUpload['error']);
+        }
+        if ($logoUpload['uploaded']) {
+            $storedLogoPath = $logoUpload['path'];
+            $logoQuery = "UPDATE businesses SET company_logo_path = ? WHERE id = ?";
+            $logoStmt = mysqli_prepare($conn, $logoQuery);
+            mysqli_stmt_bind_param($logoStmt, 'si', $storedLogoPath, $businessId);
+            if (!mysqli_stmt_execute($logoStmt)) {
+                throw new RuntimeException('Error saving the company logo reference.');
+            }
+        }
+
         // 5. Create Business Membership
         $memberType = 'OWNER';
         $membershipStatus = 'PENDING';
@@ -231,7 +248,8 @@ if ($action === 'register') {
         
         writeAuditLog($conn, $businessId, 'BUSINESS_REGISTERED', 'business', $businessId, [
             'business_name' => $business_name,
-            'owner_email' => $owner_email
+            'owner_email' => $owner_email,
+            'company_logo_uploaded' => $storedLogoPath !== null
         ]);
 
         // Clear temporary sessions
@@ -245,10 +263,25 @@ if ($action === 'register') {
         header("Location: ../../login.php");
         exit();
 
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
         mysqli_rollback($conn);
+        if ($storedLogoPath !== null) {
+            deleteCompanyLogoFile($storedLogoPath);
+        }
         error_log("Business Registration Failed: " . $e->getMessage());
-        setFlashMessage('error', 'Registration failed. Please try again. System error logged.');
+        $safeUploadErrors = [
+            'The company logo upload did not complete successfully.',
+            'The uploaded company logo is invalid.',
+            'The company logo must be a JPG, PNG, or WEBP image no larger than 3 MB.',
+            'The company logo must be a valid JPG, PNG, or WEBP image.',
+            'The company logo storage directory is unavailable.',
+            'A secure company logo filename could not be generated.',
+            'The company logo could not be saved.'
+        ];
+        $message = in_array($e->getMessage(), $safeUploadErrors, true)
+            ? $e->getMessage()
+            : 'Registration failed. Please try again. System error logged.';
+        setFlashMessage('error', $message);
         header("Location: index.php");
         exit();
     }

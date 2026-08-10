@@ -25,6 +25,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .topbar-brand .logo-badge {
@@ -36,6 +37,8 @@
   align-items: center;
   justify-content: center;
   box-shadow: 0 2px 8px rgba(27, 75, 90, 0.2);
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .topbar-brand .logo-badge svg {
@@ -44,10 +47,19 @@
   fill: #fff;
 }
 
+.topbar-brand .logo-badge img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background: var(--card);
+}
+
 .topbar-brand .logo-info {
   display: flex;
   flex-direction: column;
   line-height: 1.15;
+  min-width: 0;
 }
 
 .topbar-brand .logo-text {
@@ -55,6 +67,10 @@
   font-weight: 700;
   color: var(--text);
   letter-spacing: -0.2px;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .topbar-brand .logo-sub {

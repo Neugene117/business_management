@@ -103,6 +103,32 @@ $navbarMembershipId = $_SESSION['membership_id'] ?? null;
 $navbarBusinessId = $_SESSION['active_business_id'] ?? null;
 $navbarCanViewDashboard = hasPermission($conn, $navbarMembershipId, $navbarBusinessId, 'dashboard.view');
 $navbarCanViewSettings = hasPermission($conn, $navbarMembershipId, $navbarBusinessId, 'settings.view');
+$navbarCompanyName = 'BM System';
+$navbarCompanyLogoUrl = null;
+if (!empty($navbarBusinessId)) {
+    if (isSuperAdmin()) {
+        $companyQuery = "SELECT business_name, company_logo_path FROM businesses WHERE id = ? LIMIT 1";
+        $companyStmt = mysqli_prepare($conn, $companyQuery);
+        mysqli_stmt_bind_param($companyStmt, 'i', $navbarBusinessId);
+    } else {
+        $navbarUserId = (int)($_SESSION['user_id'] ?? 0);
+        $companyQuery = "
+            SELECT b.business_name, b.company_logo_path
+            FROM businesses b
+            JOIN business_memberships m ON m.business_id = b.id
+            WHERE b.id = ? AND m.id = ? AND m.user_id = ? AND m.status = 'ACTIVE'
+            LIMIT 1
+        ";
+        $companyStmt = mysqli_prepare($conn, $companyQuery);
+        mysqli_stmt_bind_param($companyStmt, 'iii', $navbarBusinessId, $navbarMembershipId, $navbarUserId);
+    }
+    mysqli_stmt_execute($companyStmt);
+    $navbarCompany = mysqli_fetch_assoc(mysqli_stmt_get_result($companyStmt));
+    if ($navbarCompany) {
+        $navbarCompanyName = $navbarCompany['business_name'];
+        $navbarCompanyLogoUrl = getCompanyLogoUrl($navbarCompany['company_logo_path'] ?? null, $root_prefix);
+    }
+}
 $notificationCsrfToken = generateCsrfToken();
 $notificationEndpoint = $root_prefix . 'includes/navbar.php';
 ?>
@@ -110,11 +136,15 @@ $notificationEndpoint = $root_prefix . 'includes/navbar.php';
 <header class="topbar">
   <div class="topbar-brand">
     <div class="logo-badge">
-      <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      <?php if ($navbarCompanyLogoUrl): ?>
+        <img src="<?php echo e($navbarCompanyLogoUrl); ?>" alt="<?php echo e($navbarCompanyName); ?> logo">
+      <?php else: ?>
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      <?php endif; ?>
     </div>
     <div class="logo-info">
-      <div class="logo-text">BM System</div>
-      <div class="logo-sub">Financial Suite</div>
+      <div class="logo-text" title="<?php echo e($navbarCompanyName); ?>"><?php echo e($navbarCompanyName); ?></div>
+      <div class="logo-sub">Business Workspace</div>
     </div>
   </div>
 
