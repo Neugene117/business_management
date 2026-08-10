@@ -16,30 +16,9 @@ if (isSuperAdmin()) {
     }
 }
 
-// Allow URL override for reviewer testing ease
-if (isset($_GET['role'])) {
-    $role_override = strtolower(trim($_GET['role']));
-    if (in_array($role_override, ['super_admin', 'owner', 'employee'])) {
-        $user_role = $role_override;
-    }
-}
-
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$role_query = '';
 $businessId = $_SESSION['active_business_id'] ?? 0;
 ?>
-
-<!-- VIEW AS ROLE SWITCHER WIDGET (Developer testing helper) -->
-<div class="view-as-widget" style="background: var(--card); border: 1px dashed var(--border); padding: 12px 16px; border-radius: var(--radius); display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 10px;">
-  <div style="display: flex; align-items: center; gap: 8px;">
-    <span style="font-size: 11px; text-transform: uppercase; font-weight: 600; color: var(--text3); letter-spacing: 0.5px;">Testing Widget:</span>
-    <span style="font-size: 12px; font-weight: 500;">Simulate active dashboard layout:</span>
-  </div>
-  <div style="display: flex; gap: 6px;">
-    <a href="index.php?role=super_admin" class="btn-sm <?php echo ($user_role === 'super_admin') ? 'active' : ''; ?>" style="text-decoration:none;">Super Admin</a>
-    <a href="index.php?role=owner" class="btn-sm <?php echo ($user_role === 'owner') ? 'active' : ''; ?>" style="text-decoration:none;">Owner</a>
-    <a href="index.php?role=employee" class="btn-sm <?php echo ($user_role === 'employee') ? 'active' : ''; ?>" style="text-decoration:none;">Employee</a>
-  </div>
-</div>
 
 <div class="dashboard-header" style="margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
   <div>
@@ -575,7 +554,7 @@ $businessId = $_SESSION['active_business_id'] ?? 0;
     <?php
     $empMembershipId = $_SESSION['membership_id'] ?? 0;
     // Logged sales count
-    $salesCountQ = "SELECT COUNT(*) as scount, SUM(total_amount) as stotal FROM sales WHERE business_id = ? AND created_by_membership_id = ?";
+    $salesCountQ = "SELECT COUNT(*) as scount, SUM(total_amount) as stotal FROM sales WHERE business_id = ? AND cashier_membership_id = ?";
     $scStmt = mysqli_prepare($conn, $salesCountQ);
     mysqli_stmt_bind_param($scStmt, 'ii', $businessId, $empMembershipId);
     mysqli_stmt_execute($scStmt);

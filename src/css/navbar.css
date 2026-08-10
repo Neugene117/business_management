@@ -35,7 +35,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(232, 83, 26, 0.2);
+  box-shadow: 0 2px 8px rgba(27, 75, 90, 0.2);
 }
 
 .topbar-brand .logo-badge svg {
@@ -185,7 +185,7 @@
 .icon-btn.active {
   background: var(--orange-light);
   color: var(--orange);
-  border-color: rgba(232, 83, 26, 0.2);
+  border-color: rgba(27, 75, 90, 0.2);
 }
 
 .icon-btn svg {

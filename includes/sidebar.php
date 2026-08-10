@@ -9,15 +9,7 @@ if (isset($_SESSION['platform_context']) && $_SESSION['platform_context'] === 'S
     }
 }
 
-// Allow switching via URL parameter for testing/review comfort
-if (isset($_GET['role'])) {
-    $role_override = strtolower(trim($_GET['role']));
-    if (in_array($role_override, ['super_admin', 'owner', 'employee'])) {
-        $user_role = $role_override;
-    }
-}
-
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$role_query = '';
 $dash_link = $root_prefix . 'pages/dashboard/index.php' . $role_query;
 $settings_link = $root_prefix . 'pages/settings/index.php' . $role_query;
 ?>

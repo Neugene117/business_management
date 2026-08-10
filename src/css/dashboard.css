@@ -16,26 +16,26 @@ html {
 
 :root {
   /* Brand Colors */
-  --orange: #E8531A;
-  --orange-light: #FBF0EB;
-  --orange-mid: #F26B3A;
+  --orange: #1B4B5A;
+  --orange-light: #E3EFF3;
+  --orange-mid: #2A6B7C;
 
   /* Layout */
   --sidebar-w: 220px;
   --nav-h: 58px;
 
   /* Backgrounds & Borders */
-  --bg: #F5F5F4;
+  --bg: #F0F4F7;
   --card: #fff;
-  --border: #E8E6E1;
-  --border-hover: #ccc;
-  --table-border: #F2F0ED;
-  --table-hover: #FAFAF8;
+  --border: #DEE5EB;
+  --border-hover: #C5CED6;
+  --table-border: #EDF1F5;
+  --table-hover: #F7F9FB;
 
   /* Text */
-  --text: #1A1A18;
-  --text2: #6B6B67;
-  --text3: #9B9B97;
+  --text: #1A2332;
+  --text2: #5A6B7F;
+  --text3: #8C9BAD;
 
   /* Status Colors */
   --green: #0F6E56;
@@ -302,7 +302,7 @@ button:focus-visible,
 .btn-sm:focus-visible,
 .btn-action:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(232, 83, 26, 0.2);
+  box-shadow: 0 0 0 3px rgba(27, 75, 90, 0.2);
 }
 
 button:active,
@@ -319,14 +319,14 @@ button:active,
   color: #ffffff;
   border-color: var(--orange);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(232, 83, 26, 0.2);
+  box-shadow: 0 1px 3px rgba(27, 75, 90, 0.2);
 }
 
 .btn-primary:hover {
   background: var(--orange-mid);
   border-color: var(--orange-mid);
   color: #ffffff;
-  box-shadow: 0 2px 6px rgba(232, 83, 26, 0.3);
+  box-shadow: 0 2px 6px rgba(27, 75, 90, 0.3);
 }
 
 /* Secondary / Outline Button */
@@ -1213,6 +1213,15 @@ button svg,
   animation: modalSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.modal-content-card > form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  margin: 0;
+}
+
 .modal-content-card.modal-lg {
   max-width: 780px;
 }
@@ -1276,6 +1285,10 @@ button svg,
   padding: 20px;
   overflow-y: auto;
   flex: 1;
+  min-height: 0;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .modal-footer {
@@ -1287,6 +1300,39 @@ button svg,
   justify-content: flex-end;
   gap: 10px;
   flex-shrink: 0;
+}
+
+/* Modern sleek scrollbar styling for modal body & scroll containers */
+.modal-body::-webkit-scrollbar,
+.modal-content-card::-webkit-scrollbar,
+#itemsContainer::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.modal-body::-webkit-scrollbar-track,
+.modal-content-card::-webkit-scrollbar-track,
+#itemsContainer::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-body::-webkit-scrollbar-thumb,
+.modal-content-card::-webkit-scrollbar-thumb,
+#itemsContainer::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+  transition: background 0.2s ease;
+}
+
+.modal-body::-webkit-scrollbar-thumb:hover,
+.modal-content-card::-webkit-scrollbar-thumb:hover,
+#itemsContainer::-webkit-scrollbar-thumb:hover {
+  background: var(--text3);
+}
+
+.modal-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 @keyframes modalSlideIn {
@@ -1385,7 +1431,7 @@ select:focus,
 textarea:focus,
 .form-control:focus {
   border-color: var(--orange);
-  box-shadow: 0 0 0 3px rgba(232, 83, 26, 0.12);
+  box-shadow: 0 0 0 3px rgba(27, 75, 90, 0.12);
 }
 
 /* Header & Card Filter Form Controls */

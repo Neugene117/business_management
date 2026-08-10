@@ -1,5 +1,6 @@
 /* ==========================================
    BUSINESS MANAGEMENT — Login Styles
+   Single Centered Card · Dark Teal Theme
    ========================================== */
 
 /* --- Reset & Variables --- */
@@ -11,19 +12,19 @@
 
 :root {
   /* Brand Colors */
-  --orange: #E8531A;
-  --orange-light: #FBF0EB;
-  
+  --orange: #1B4B5A;
+  --orange-light: #E3EFF3;
+
   /* Layout Colors */
-  --bg: #F5F5F4;
+  --bg: #F0F4F7;
   --card: #fff;
-  --border: #E8E6E1;
-  --border-hover: #ccc;
+  --border: #DEE5EB;
+  --border-hover: #B8C5D0;
 
   /* Text Colors */
-  --text: #1A1A18;
-  --text2: #6B6B67;
-  --text3: #9B9B97;
+  --text: #1A2332;
+  --text2: #5A6B7F;
+  --text3: #8C9BAD;
 
   /* Status Colors */
   --red: #A32D2D;
@@ -32,119 +33,138 @@
   --green-bg: #E1F5EE;
 
   /* Radii */
-  --radius: 6px;
-  --radius-lg: 10px;
+  --radius: 8px;
+  --radius-lg: 14px;
 
   /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(27, 75, 90, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 12px 40px rgba(27, 75, 90, 0.12), 0 4px 12px rgba(0, 0, 0, 0.04);
 
   /* Font */
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
+/* --- Page Wrapper --- */
 body {
   background: var(--bg);
   min-height: 100vh;
-  display: flex;
-  align-items: stretch;
   color: var(--text);
-  font-size: 13px;
-  overflow: auto;
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* LEFT PANEL (Form) */
-.left-panel {
-  flex: 1;
-  background: var(--card);
+.login-page {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 40px;
+  min-height: 100vh;
+  padding: 40px 20px;
+}
+
+/* --- Centered Card --- */
+.login-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
   position: relative;
-  border-right: 1px solid var(--border);
+  overflow: hidden;
+  animation: cardFadeIn 0.5s ease-out;
 }
 
-.left-panel::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: var(--orange);
+.login-card::before {
+  display: none;
 }
 
-/* BRAND */
+@keyframes cardFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* --- Brand --- */
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 30px;
+  gap: 12px;
+  margin-bottom: 28px;
 }
 
 .logo-badge {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   background: var(--orange);
-  border-radius: 8px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(27, 75, 90, 0.25);
 }
 
 .logo-badge svg {
-  width: 20px;
-  height: 20px;
+  width: 21px;
+  height: 21px;
   fill: none;
   stroke: #fff;
   stroke-width: 1.8;
 }
 
 .brand-text {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--text);
   line-height: 1.2;
+  letter-spacing: -0.2px;
 }
 
 .brand-sub {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text3);
   font-weight: 400;
+  margin-top: 1px;
 }
 
-/* FORM CARD */
+/* --- Form Card (inner) --- */
 .form-card {
-  width: 100%;
-  max-width: 380px;
+  padding: 36px 36px 32px;
 }
 
 .form-title {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 600;
   color: var(--text);
   margin-bottom: 4px;
+  letter-spacing: -0.3px;
 }
 
 .form-desc {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--text3);
-  margin-bottom: 24px;
+  margin-bottom: 26px;
 }
 
+/* --- Fields --- */
 .field {
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .field label {
   display: block;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--text2);
-  margin-bottom: 5px;
+  margin-bottom: 6px;
 }
 
 .field-wrap {
@@ -153,48 +173,54 @@ body {
 
 .field-wrap svg.field-icon {
   position: absolute;
-  left: 10px;
+  left: 12px;
   top: 50%;
   transform: translateY(-50%);
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   stroke: var(--text3);
   fill: none;
   stroke-width: 1.8;
   pointer-events: none;
+  transition: stroke 0.2s ease;
 }
 
 .field input,
 .field select,
 .field textarea {
   width: 100%;
-  padding: 9px 12px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  font-size: 12.5px;
+  font-size: 13px;
   background: var(--bg);
   color: var(--text);
   outline: none;
   font-family: inherit;
-  transition: border-color .15s, background .15s;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
 }
 
 .field-wrap svg.field-icon + input,
 .field-wrap svg.field-icon + select,
 .field-wrap svg.field-icon + textarea {
-  padding-left: 34px;
+  padding-left: 38px;
 }
 
 .field-wrap input:has(~ .toggle-pw) {
-  padding-right: 36px;
+  padding-right: 40px;
 }
 
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
-  border-color: var(--border-hover);
+  border-color: var(--orange);
   background: var(--card);
-  box-shadow: 0 0 0 3px rgba(232,83,26,.07);
+  box-shadow: 0 0 0 3px rgba(27, 75, 90, 0.1);
+}
+
+.field input:focus ~ svg.field-icon,
+.field-wrap:focus-within svg.field-icon {
+  stroke: var(--orange);
 }
 
 .field input::placeholder,
@@ -202,94 +228,106 @@ body {
   color: var(--text3);
 }
 
+/* --- Toggle Password --- */
 .toggle-pw {
   position: absolute;
-  right: 10px;
+  right: 12px;
   top: 50%;
   transform: translateY(-50%);
   cursor: pointer;
   background: none;
   border: none;
-  padding: 0;
+  padding: 2px;
   display: flex;
   align-items: center;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+
+.toggle-pw:hover {
+  background: var(--orange-light);
 }
 
 .toggle-pw svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   stroke: var(--text3);
   fill: none;
   stroke-width: 1.8;
-  transition: stroke .15s;
+  transition: stroke 0.15s ease;
 }
 
 .toggle-pw:hover svg {
-  stroke: var(--text2);
+  stroke: var(--orange);
 }
 
+/* --- Field Row (Remember + Forgot) --- */
 .field-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
+  margin-bottom: 22px;
 }
 
 .checkbox-wrap {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   cursor: pointer;
 }
 
 .checkbox-wrap input[type=checkbox] {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   accent-color: var(--orange);
   cursor: pointer;
+  border-radius: 3px;
 }
 
 .checkbox-wrap span {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text2);
 }
 
 .forgot {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--orange);
   text-decoration: none;
   font-weight: 500;
+  transition: color 0.15s ease;
 }
 
 .forgot:hover {
+  color: #153D4A;
   text-decoration: underline;
 }
 
+/* --- Login Button --- */
 .btn-login,
 .btn-submit {
   width: 100%;
-  padding: 11px 16px;
+  padding: 12px 18px;
   background: var(--orange);
   color: #ffffff;
   border: none;
   border-radius: var(--radius);
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
-  transition: background 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+  transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  letter-spacing: .2px;
-  box-shadow: 0 1px 3px rgba(232, 83, 26, 0.2);
+  letter-spacing: 0.2px;
+  box-shadow: 0 2px 8px rgba(27, 75, 90, 0.25);
 }
 
 .btn-login:hover,
 .btn-submit:hover {
-  background: #d44c15;
-  box-shadow: 0 2px 6px rgba(232, 83, 26, 0.3);
+  background: #153D4A;
+  box-shadow: 0 4px 14px rgba(27, 75, 90, 0.35);
 }
 
 .btn-login:active,
@@ -300,179 +338,141 @@ body {
 .btn-login:focus-visible,
 .btn-submit:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(232, 83, 26, 0.25);
+  box-shadow: 0 0 0 3px rgba(27, 75, 90, 0.3);
 }
 
 .btn-login svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   stroke: #fff;
   fill: none;
   stroke-width: 2.2;
   flex-shrink: 0;
+  transition: transform 0.2s ease;
 }
 
+.btn-login:hover svg {
+  transform: translateX(3px);
+}
+
+/* --- Form Footer --- */
 .form-footer {
   text-align: center;
   margin-top: 22px;
-  font-size: 12px;
+  padding-top: 18px;
+  font-size: 12.5px;
   color: var(--text3);
+  border-top: 1px solid var(--border);
 }
 
 .form-footer a {
   color: var(--orange);
   font-weight: 500;
   text-decoration: none;
+  transition: color 0.15s ease;
 }
 
 .form-footer a:hover {
+  color: #153D4A;
   text-decoration: underline;
 }
 
-/* ERROR / SUCCESS */
+/* --- Alert Messages --- */
 .alert-msg {
   display: none;
   align-items: center;
-  gap: 7px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 10px 12px;
   border-radius: var(--radius);
-  font-size: 12px;
-  margin-bottom: 14px;
+  font-size: 12.5px;
+  margin-bottom: 16px;
+  line-height: 1.4;
 }
 
 .alert-msg.error {
   background: var(--red-bg);
   color: var(--red);
-  border: 1px solid rgba(163, 45, 45, 0.2);
+  border: 1px solid rgba(163, 45, 45, 0.15);
   display: flex;
 }
 
 .alert-msg.success {
   background: var(--green-bg);
   color: var(--green);
-  border: 1px solid rgba(15, 110, 86, 0.2);
+  border: 1px solid rgba(15, 110, 86, 0.15);
   display: flex;
 }
 
 .alert-msg svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   stroke: currentColor;
   fill: none;
   stroke-width: 2;
   flex-shrink: 0;
 }
 
-/* LOADING SPINNER */
+/* --- Loading Spinner --- */
 .spinner {
   display: none;
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(255,255,255,.4);
+  border: 2px solid rgba(255, 255, 255, 0.4);
   border-top-color: #fff;
   border-radius: 50%;
-  animation: spin .7s linear infinite;
+  animation: spin 0.7s linear infinite;
 }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
 
-/* RIGHT PANEL (Branding) */
-.right-panel {
-  flex: 1;
-  background: var(--orange);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  position: relative;
-  overflow: hidden;
-}
-
-.right-panel::after {
-  content: '';
-  position: absolute;
-  width: 320px;
-  height: 320px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, .12);
-  top: -80px;
-  right: -80px;
-}
-
-.right-panel::before {
-  content: '';
-  position: absolute;
-  width: 220px;
-  height: 220px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, .1);
-  bottom: -60px;
-  left: -60px;
-}
-
-.rp-content {
-  position: relative;
-  z-index: 1;
+/* --- Page Footer --- */
+.login-footer {
+  margin-top: 32px;
   text-align: center;
-  color: #fff;
-  max-width: 340px;
+  font-size: 11.5px;
+  color: var(--text3);
+  animation: cardFadeIn 0.6s ease-out 0.15s both;
 }
 
-.rp-icon-wrap {
-  width: 72px;
-  height: 72px;
-  background: rgba(255, 255, 255, .18);
-  border-radius: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 24px;
+/* --- Responsive --- */
+@media (max-width: 520px) {
+  .login-page {
+    padding: 24px 16px;
+    justify-content: flex-start;
+    padding-top: 48px;
+  }
+
+  .login-card {
+    border-radius: 12px;
+  }
+
+  .form-card {
+    padding: 28px 24px 24px;
+  }
+
+  .form-title {
+    font-size: 20px;
+  }
+
+  .brand {
+    margin-bottom: 22px;
+  }
+
+  .login-footer {
+    margin-top: 24px;
+  }
 }
 
-.rp-icon-wrap svg {
-  width: 36px;
-  height: 36px;
-  stroke: #fff;
-  fill: none;
-  stroke-width: 1.5;
-}
+@media (max-width: 360px) {
+  .form-card {
+    padding: 24px 18px 20px;
+  }
 
-.rp-title {
-  font-size: 22px;
-  font-weight: 600;
-  margin-bottom: 12px;
-  line-height: 1.3;
-}
-
-.rp-desc {
-  font-size: 13px;
-  opacity: .85;
-  line-height: 1.6;
-}
-
-.rp-footer {
-  font-size: 11px;
-  opacity: .5;
-  margin-top: 36px;
-  text-align: center;
-  position: relative;
-  z-index: 1;
-}
-
-@media (max-width: 800px) {
-  body {
+  .field-row {
     flex-direction: column;
-  }
-  .right-panel {
-    width: 100%;
-    padding: 30px 24px;
-    order: -1;
-    flex: none;
-  }
-  .left-panel {
-    padding: 32px 24px;
+    align-items: flex-start;
+    gap: 8px;
   }
 }

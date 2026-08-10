@@ -147,7 +147,7 @@
 /* Active State Styles */
 .app-grid-item.active {
   background: var(--orange-light);
-  border-color: rgba(232, 83, 26, 0.15);
+  border-color: rgba(27, 75, 90, 0.15);
   color: var(--orange);
 }
 

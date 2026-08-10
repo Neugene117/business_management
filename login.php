@@ -171,85 +171,77 @@ $csrfToken = generateCsrfToken();
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Business Management — Sign In</title>
+<meta name="description" content="Sign in to your Business Management Financial Suite account.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="src/css/login.css">
 </head>
 <body>
 
-<!-- LEFT: FORM PANEL -->
-<div class="left-panel">
-  <div class="form-card">
+<div class="login-page">
+  <div class="login-card">
+    <div class="form-card">
 
-    <div class="brand">
-      <div class="logo-badge">
-        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-      </div>
-      <div>
-        <div class="brand-text">Business Management</div>
-        <div class="brand-sub">Financial Suite</div>
-      </div>
-    </div>
-
-    <div class="form-title">Welcome back</div>
-    <div class="form-desc">Sign in to access your account</div>
-
-    <?php displayFlashMessage(); ?>
-
-    <form action="login.php" method="POST" id="loginForm">
-      <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
-
-      <div class="field">
-        <label for="email">Email address</label>
-        <div class="field-wrap">
-          <svg class="field-icon" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-          <input type="email" name="email" id="email" placeholder="admin@bm.rw" value="<?php echo e($email); ?>" required autocomplete="email">
+      <div class="brand">
+        <div class="logo-badge">
+          <span style="color: #fff; font-weight: 700; font-size: 14px; letter-spacing: 0.5px;">Logo</span>
+        </div>
+        <div>
+          <div class="brand-text">Business Management</div>
+          <div class="brand-sub">Financial Suite</div>
         </div>
       </div>
 
-      <div class="field">
-        <label for="password">Password</label>
-        <div class="field-wrap">
-          <svg class="field-icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-          <input type="password" name="password" id="password" placeholder="Enter your password" required autocomplete="current-password">
-          <button class="toggle-pw" type="button" onclick="togglePassword()" id="toggleBtn" title="Show password">
-            <svg id="eyeIcon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-          </button>
+      <div class="form-title">Welcome back</div>
+      <div class="form-desc">Sign in to access your account</div>
+
+      <?php displayFlashMessage(); ?>
+
+      <form action="login.php" method="POST" id="loginForm">
+        <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
+
+        <div class="field">
+          <label for="email">Email address</label>
+          <div class="field-wrap">
+            <svg class="field-icon" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            <input type="email" name="email" id="email" placeholder="admin@bm.rw" value="<?php echo e($email); ?>" required autocomplete="email">
+          </div>
         </div>
+
+        <div class="field">
+          <label for="password">Password</label>
+          <div class="field-wrap">
+            <svg class="field-icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            <input type="password" name="password" id="password" placeholder="Enter your password" required autocomplete="current-password">
+            <button class="toggle-pw" type="button" onclick="togglePassword()" id="toggleBtn" title="Show password">
+              <svg id="eyeIcon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <label class="checkbox-wrap">
+            <input type="checkbox" name="remember">
+            <span>Remember me</span>
+          </label>
+          <a href="#" class="forgot">Forgot password?</a>
+        </div>
+
+        <button class="btn-login" type="submit" id="loginBtn">
+          <span>Sign In</span>
+          <svg id="btnArrow" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </button>
+      </form>
+
+      <div class="form-footer">
+        Want to register a business? <a href="pages/business_registration/index.php">Register Business</a>
       </div>
 
-      <div class="field-row">
-        <label class="checkbox-wrap">
-          <input type="checkbox" name="remember">
-          <span>Remember me</span>
-        </label>
-        <a href="#" class="forgot">Forgot password?</a>
-      </div>
-
-      <button class="btn-login" type="submit" id="loginBtn">
-        <span>Sign In</span>
-        <svg id="btnArrow" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-      </button>
-    </form>
-
-    <div class="form-footer">
-      Want to register a business? <a href="pages/business_registration/index.php">Register Business</a>
     </div>
-
-  </div>
-</div>
-
-<!-- RIGHT: BRAND PANEL -->
-<div class="right-panel">
-  <div class="rp-content">
-    <div class="rp-icon-wrap">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
-    </div>
-    <div class="rp-title">Business Management<br>Financial Suite</div>
-    <div class="rp-desc">Consolidated cash schedules, bank reconciliation, petty cash tracking, and mineral stock valuation in a unified administration suite.</div>
   </div>
 
-  <div class="rp-footer">© 2026 Business Management · All rights reserved</div>
+  <div class="login-footer">&copy; <?php echo date('Y'); ?> Business Management &middot; All rights reserved</div>
 </div>
 
 <script>
