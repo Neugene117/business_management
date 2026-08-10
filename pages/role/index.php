@@ -6,11 +6,27 @@ $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
 $businessId = $_SESSION['active_business_id'] ?? 0;
+$currentUserId = $_SESSION['user_id'] ?? 0;
+$canEditPermissions = isEffectiveSuperAdmin();
 
 // Fetch business roles
-$queryRoles = "SELECT * FROM business_roles WHERE business_id = ? ORDER BY id ASC";
+$queryRoles = "
+    SELECT br.*,
+           EXISTS (
+               SELECT 1
+               FROM audit_logs al
+               WHERE al.business_id = br.business_id
+                 AND al.action = 'BUSINESS_ROLE_CREATED'
+                 AND al.entity_type = 'business_role'
+                 AND CAST(al.entity_id AS UNSIGNED) = br.id
+                 AND al.actor_user_id = ?
+           ) AS created_by_current_user
+    FROM business_roles br
+    WHERE br.business_id = ?
+    ORDER BY br.id ASC
+";
 $rStmt = mysqli_prepare($conn, $queryRoles);
-mysqli_stmt_bind_param($rStmt, 'i', $businessId);
+mysqli_stmt_bind_param($rStmt, 'ii', $currentUserId, $businessId);
 mysqli_stmt_execute($rStmt);
 $rolesResult = mysqli_stmt_get_result($rStmt);
 
@@ -55,13 +71,56 @@ mysqli_stmt_execute($oStmt);
 $overridesResult = mysqli_stmt_get_result($oStmt);
 
 $csrfToken = generateCsrfToken();
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$role_query = getRolePreviewQuery();
+$roleCount = mysqli_num_rows($rolesResult);
+$permissionCount = count($all_perms);
+$permissionModules = array_values(array_unique(array_column($all_perms, 'module')));
+sort($permissionModules, SORT_NATURAL | SORT_FLAG_CASE);
+$overrideCount = mysqli_num_rows($overridesResult);
 ?>
-<div>
-  <!-- Left: Roles & Assigned permissions -->
-  <div class="card">
-    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
-      <div class="card-title">Authorization Roles &amp; Permissions</div>
+<div class="access-page">
+  <header class="access-hero">
+    <div>
+      <h1>Access Control Workspace</h1>
+      <p>Review business roles, understand assigned access, and keep authorization rules organized from one secure workspace.</p>
+    </div>
+  </header>
+
+  <div class="access-summary" aria-label="Access control summary">
+    <div class="access-summary-card">
+      <div class="access-summary-label">Business roles</div>
+      <div class="access-summary-value"><?php echo (int)$roleCount; ?></div>
+    </div>
+    <div class="access-summary-card">
+      <div class="access-summary-label">Permissions</div>
+      <div class="access-summary-value"><?php echo (int)$permissionCount; ?></div>
+    </div>
+    <div class="access-summary-card">
+      <div class="access-summary-label">Modules</div>
+      <div class="access-summary-value"><?php echo count($permissionModules); ?></div>
+    </div>
+    <?php if ($canEditPermissions): ?>
+      <div class="access-summary-card">
+        <div class="access-summary-label">Direct overrides</div>
+        <div class="access-summary-value"><?php echo (int)$overrideCount; ?></div>
+      </div>
+    <?php endif; ?>
+  </div>
+
+  <nav class="access-jump-nav" aria-label="Access control sections">
+    <a href="#roles-section">Roles</a>
+    <a href="#permissions-section">Permission Library</a>
+    <?php if ($canEditPermissions): ?>
+      <a href="#overrides-section">Direct Overrides</a>
+    <?php endif; ?>
+  </nav>
+
+  <section class="card access-section" id="roles-section">
+    <div class="card-header">
+      <div class="section-heading">
+        <div class="card-title">Business Roles</div>
+        <p>Create custom roles and review how many privileges are assigned to each access profile.</p>
+      </div>
       <button class="btn-primary" onclick="openAddRoleModal()">+ Create Custom Role</button>
     </div>
     
@@ -76,7 +135,10 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
         </tr>
       </thead>
       <tbody>
-        <?php 
+        <?php if ($roleCount === 0): ?>
+          <tr><td colspan="5" class="empty-state-cell">No business roles are available in this context.</td></tr>
+        <?php else: ?>
+        <?php
         mysqli_data_seek($rolesResult, 0);
         while ($row = mysqli_fetch_assoc($rolesResult)): 
             // Get count of permissions assigned to this role
@@ -88,22 +150,40 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
         ?>
           <tr>
             <td><span class="code-badge"><?php echo e($row['code']); ?></span></td>
-            <td class="td-name"><?php echo e($row['name']); ?></td>
+            <td class="td-name">
+              <?php echo e($row['name']); ?>
+              <?php if ((int)$row['is_system'] === 1): ?><span class="system-badge">System</span><?php endif; ?>
+            </td>
             <td style="font-size: 11.5px; color: var(--text3);"><?php echo e($row['description'] ?? 'No description'); ?></td>
             <td><span style="font-weight: 600; color: var(--blue);"><?php echo (int)$cnt; ?></span> assigned permissions</td>
             <td style="text-align: right;">
               <div style="display:inline-flex; gap: 4px;">
-                <button class="btn-sm" onclick="editRolePermissions(<?php echo (int)$row['id']; ?>, '<?php echo e($row['name']); ?>')">Manage Privileges</button>
+                <?php if ($canEditPermissions): ?>
+                <button class="btn-sm" type="button" data-role-id="<?php echo (int)$row['id']; ?>" data-role-name="<?php echo e($row['name']); ?>" onclick="editRolePermissions(this)">Manage Privileges</button>
+                <?php endif; ?>
+                <?php
+                $isProtectedRole = (int)$row['is_system'] === 1
+                    || strcasecmp($row['code'], 'OWNER') === 0
+                    || strcasecmp($row['name'], 'Owner') === 0;
+                $canDeleteRole = !$isProtectedRole
+                    && ($canEditPermissions || (isBusinessOwner() && (int)$row['created_by_current_user'] === 1));
+                ?>
+                <?php if ($canDeleteRole): ?>
+                  <form action="backend.php<?php echo e($role_query); ?>" method="POST" style="display:inline;" onsubmit="return confirm('Delete this custom role? Assigned memberships and privileges will be removed.');">
+                    <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
+                    <input type="hidden" name="action" value="delete_role">
+                    <input type="hidden" name="role_id" value="<?php echo (int)$row['id']; ?>">
+                    <button type="submit" class="btn-action reject" style="font-size:10px; padding:3px 6px;">Delete</button>
+                  </form>
+                <?php endif; ?>
               </div>
             </td>
           </tr>
         <?php endwhile; ?>
+        <?php endif; ?>
       </tbody>
     </table>
-  </div>
-
-  </div>
-</div>
+  </section>
 
 <!-- ==========================================
      MODAL: CREATE CUSTOM ROLE
@@ -154,18 +234,114 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
   </div>
 </div>
 
+<section class="card access-section" id="permissions-section">
+  <div class="card-header">
+    <div class="section-heading">
+      <div class="card-title">Permission Library</div>
+      <p><?php echo $canEditPermissions
+          ? 'Search, filter, create, and maintain the permission definitions available to business roles.'
+          : 'Browse and search the permission definitions available to business roles. Permission management is restricted to the Super Admin.'; ?></p>
+    </div>
+    <?php if ($canEditPermissions): ?>
+      <button class="btn-primary" type="button" onclick="openPermissionModal()">+ Create Permission</button>
+    <?php endif; ?>
+  </div>
+  <div class="access-toolbar">
+    <div class="access-search">
+      <input type="search" id="permissionSearch" placeholder="Search by code, name, or description..." aria-label="Search permissions">
+    </div>
+    <select id="permissionModuleFilter" aria-label="Filter permissions by module">
+      <option value="">All modules</option>
+      <?php foreach ($permissionModules as $module): ?>
+        <option value="<?php echo e(strtolower($module)); ?>"><?php echo e(ucwords(str_replace('_', ' ', $module))); ?></option>
+      <?php endforeach; ?>
+    </select>
+  </div>
+  <table class="data-table" id="permissionsTable">
+    <thead>
+      <tr>
+        <th>Permission Code</th>
+        <th>Module</th>
+        <th>Name</th>
+        <th>Description</th>
+        <?php if ($canEditPermissions): ?><th style="text-align:right;">Action</th><?php endif; ?>
+      </tr>
+    </thead>
+    <tbody>
+      <?php foreach ($all_perms as $permission): ?>
+        <tr data-permission-row data-module="<?php echo e(strtolower($permission['module'])); ?>" data-search="<?php echo e(strtolower($permission['code'] . ' ' . $permission['module'] . ' ' . $permission['name'] . ' ' . ($permission['description'] ?? ''))); ?>">
+          <td><span class="code-badge"><?php echo e($permission['code']); ?></span></td>
+          <td><span class="module-badge"><?php echo e(ucwords(str_replace('_', ' ', $permission['module']))); ?></span></td>
+          <td class="td-name"><?php echo e($permission['name']); ?></td>
+          <td style="font-size:11.5px; color:var(--text3);"><?php echo e($permission['description'] ?? 'No description'); ?></td>
+          <?php if ($canEditPermissions): ?>
+          <td style="text-align:right;">
+            <div style="display:inline-flex; gap:4px;">
+              <button class="btn-sm" type="button" onclick='openPermissionModal(<?php echo e(json_encode($permission, JSON_HEX_APOS | JSON_HEX_QUOT)); ?>)'>Edit</button>
+              <form action="backend.php<?php echo e($role_query); ?>" method="POST" style="display:inline;" onsubmit="return confirm('Delete this permission? It will be removed from every role and direct override.');">
+                <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
+                <input type="hidden" name="action" value="delete_permission">
+                <input type="hidden" name="permission_id" value="<?php echo (int)$permission['id']; ?>">
+                <button type="submit" class="btn-action reject" style="font-size:10px; padding:3px 6px;">Delete</button>
+              </form>
+            </div>
+          </td>
+          <?php endif; ?>
+        </tr>
+      <?php endforeach; ?>
+      <tr id="permissionEmptyRow" <?php echo $permissionCount > 0 ? 'hidden' : ''; ?>><td colspan="<?php echo $canEditPermissions ? 5 : 4; ?>" class="empty-state-cell">No permissions match the selected filters.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<?php if ($canEditPermissions): ?>
+<div class="modal-overlay" id="permissionModalOverlay">
+  <div class="modal-content-card modal-sm">
+    <div class="modal-header">
+      <div class="modal-title" id="permissionModalTitle">Create Permission</div>
+      <button type="button" class="modal-close-btn" onclick="closePermissionModal()">&times;</button>
+    </div>
+    <form action="backend.php<?php echo e($role_query); ?>" method="POST" style="display:flex; flex-direction:column; flex:1;" id="permissionForm">
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
+        <input type="hidden" name="action" id="permissionAction" value="create_permission">
+        <input type="hidden" name="permission_id" id="permissionId" value="">
+        <div class="field" style="margin-bottom:12px;">
+          <label for="permissionCode">Permission Code <span style="color:var(--red);">*</span></label>
+          <div class="field-wrap"><input type="text" name="code" id="permissionCode" placeholder="module.action" required></div>
+        </div>
+        <div class="field" style="margin-bottom:12px;">
+          <label for="permissionModule">Module <span style="color:var(--red);">*</span></label>
+          <div class="field-wrap"><input type="text" name="module" id="permissionModule" required></div>
+        </div>
+        <div class="field" style="margin-bottom:12px;">
+          <label for="permissionName">Name <span style="color:var(--red);">*</span></label>
+          <div class="field-wrap"><input type="text" name="name" id="permissionName" required></div>
+        </div>
+        <div class="field">
+          <label for="permissionDescription">Description</label>
+          <div class="field-wrap"><input type="text" name="description" id="permissionDescription"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-sm" onclick="closePermissionModal()">Cancel</button>
+        <button type="submit" class="btn-primary" id="savePermissionBtn">Create Permission</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Bottom: Direct Overrides Management -->
-<div class="card">
-  <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
-    <div class="card-title">Platform Direct Permission Overrides</div>
+<section class="card access-section" id="overrides-section">
+  <div class="card-header">
+    <div class="section-heading">
+      <div class="card-title">Direct Permission Overrides</div>
+      <p>Apply narrowly scoped allow or deny rules to an individual employee when role access needs an exception.</p>
+    </div>
     <button class="btn-primary" onclick="openOverrideModal()">+ Configure Direct Override</button>
   </div>
-  
-  <div style="padding: 20px;">
-    <!-- Active overrides table -->
-    <div style="margin-bottom: 24px;">
-      <h3 style="font-size:13px; font-weight:600; margin-bottom:8px; color:var(--text);">Active Security Overrides</h3>
-      <table class="data-table">
+
+  <table class="data-table">
         <thead>
           <tr>
             <th>Employee Membership</th>
@@ -177,7 +353,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
         <tbody>
           <?php if (mysqli_num_rows($overridesResult) === 0): ?>
             <tr>
-              <td colspan="4" style="text-align: center; color: var(--text3); padding: 15px; font-size:12px;">No direct overrides configured.</td>
+              <td colspan="4" class="empty-state-cell">No direct overrides are currently configured.</td>
             </tr>
           <?php else: ?>
             <?php while ($oRow = mysqli_fetch_assoc($overridesResult)): ?>
@@ -205,10 +381,10 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
           <?php endif; ?>
         </tbody>
       </table>
-    </div>
-  </div>
-</div>
+</section>
+<?php endif; ?>
 
+<?php if ($canEditPermissions): ?>
 <!-- ==========================================
      MODAL: CONFIGURE DIRECT OVERRIDE
      ========================================== -->
@@ -292,7 +468,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
           Check checkboxes to grant privileges to this role. Clear checkbox to remove.
         </div>
 
-        <div style="display:flex; flex-direction:column; gap:16px;">
+        <div class="permission-groups">
           <?php 
           // Group by module
           $grouped = [];
@@ -301,13 +477,13 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
           }
           foreach ($grouped as $module => $items):
           ?>
-            <div>
-              <h4 style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--text3); border-bottom:1px solid var(--border); padding-bottom:4px; margin-bottom:8px;"><?php echo e($module); ?> Module</h4>
-              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+            <div class="permission-module">
+              <h4><?php echo e(ucwords(str_replace('_', ' ', $module))); ?> Module</h4>
+              <div>
                 <?php foreach ($items as $item): ?>
-                  <label class="checkbox-wrap" style="font-size:12px;">
+                  <label class="permission-option">
                     <input type="checkbox" name="permissions[]" value="<?php echo (int)$item['id']; ?>" class="perm-cb-item" id="cb-perm-<?php echo (int)$item['id']; ?>">
-                    <span><?php echo e($item['name']); ?> <span style="font-size:10px; color:var(--text3)">[<?php echo e($item['code']); ?>]</span></span>
+                    <span><?php echo e($item['name']); ?><br><span class="code-badge"><?php echo e($item['code']); ?></span></span>
                   </label>
                 <?php endforeach; ?>
               </div>
@@ -322,8 +498,59 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     </form>
   </div>
 </div>
+<?php endif; ?>
+
+</div><!-- Close .access-page -->
 
 <script>
+function openAddRoleModal() {
+  document.getElementById('addRoleModalOverlay').style.display = 'flex';
+}
+
+function closeAddRoleModal() {
+  document.getElementById('addRoleModalOverlay').style.display = 'none';
+}
+
+const permissionSearch = document.getElementById('permissionSearch');
+const permissionModuleFilter = document.getElementById('permissionModuleFilter');
+
+function filterPermissions() {
+  const term = permissionSearch.value.trim().toLowerCase();
+  const module = permissionModuleFilter.value;
+  let visibleRows = 0;
+
+  document.querySelectorAll('[data-permission-row]').forEach(function (row) {
+    const matchesSearch = !term || row.dataset.search.includes(term);
+    const matchesModule = !module || row.dataset.module === module;
+    row.hidden = !(matchesSearch && matchesModule);
+    if (!row.hidden) visibleRows++;
+  });
+
+  document.getElementById('permissionEmptyRow').hidden = visibleRows !== 0;
+}
+
+permissionSearch.addEventListener('input', filterPermissions);
+permissionModuleFilter.addEventListener('change', filterPermissions);
+
+<?php if ($canEditPermissions): ?>
+function openPermissionModal(permission) {
+  const isEdit = permission && permission.id;
+  document.getElementById('permissionAction').value = isEdit ? 'update_permission' : 'create_permission';
+  document.getElementById('permissionId').value = isEdit ? permission.id : '';
+  document.getElementById('permissionCode').value = isEdit ? permission.code : '';
+  document.getElementById('permissionCode').disabled = Boolean(isEdit);
+  document.getElementById('permissionModule').value = isEdit ? permission.module : '';
+  document.getElementById('permissionName').value = isEdit ? permission.name : '';
+  document.getElementById('permissionDescription').value = isEdit ? (permission.description || '') : '';
+  document.getElementById('permissionModalTitle').textContent = isEdit ? 'Edit Permission' : 'Create Permission';
+  document.getElementById('savePermissionBtn').textContent = isEdit ? 'Save Permission' : 'Create Permission';
+  document.getElementById('permissionModalOverlay').style.display = 'flex';
+}
+
+function closePermissionModal() {
+  document.getElementById('permissionModalOverlay').style.display = 'none';
+}
+
 // Retrieve role permission mapping from DB dynamically
 var rolePermissionsMap = {
   <?php
@@ -344,14 +571,6 @@ var rolePermissionsMap = {
   ?>
 };
 
-function openAddRoleModal() {
-  document.getElementById('addRoleModalOverlay').style.display = 'flex';
-}
-
-function closeAddRoleModal() {
-  document.getElementById('addRoleModalOverlay').style.display = 'none';
-}
-
 function openOverrideModal() {
   document.getElementById('overrideModalOverlay').style.display = 'flex';
 }
@@ -360,7 +579,9 @@ function closeOverrideModal() {
   document.getElementById('overrideModalOverlay').style.display = 'none';
 }
 
-function editRolePermissions(roleId, roleName) {
+function editRolePermissions(button) {
+  const roleId = Number(button.dataset.roleId);
+  const roleName = button.dataset.roleName;
   document.getElementById('edit_role_id').value = roleId;
   document.getElementById('role_title_span').textContent = roleName;
   
@@ -381,10 +602,15 @@ function editRolePermissions(roleId, roleName) {
 function closeEdit() {
   document.getElementById('editModalOverlay').style.display = 'none';
 }
+<?php endif; ?>
 
 // Close modals when clicking outside
 document.getElementById('addRoleModalOverlay').addEventListener('click', function(e) {
   if (e.target === this) closeAddRoleModal();
+});
+<?php if ($canEditPermissions): ?>
+document.getElementById('permissionModalOverlay').addEventListener('click', function(e) {
+  if (e.target === this) closePermissionModal();
 });
 document.getElementById('overrideModalOverlay').addEventListener('click', function(e) {
   if (e.target === this) closeOverrideModal();
@@ -392,12 +618,18 @@ document.getElementById('overrideModalOverlay').addEventListener('click', functi
 document.getElementById('editModalOverlay').addEventListener('click', function(e) {
   if (e.target === this) closeEdit();
 });
+<?php endif; ?>
 
 // Safeguard double submissions client-side
 document.getElementById('addRoleForm').addEventListener('submit', function() {
   document.getElementById('addRoleBtn').disabled = true;
   document.getElementById('addRoleBtn').style.opacity = '0.7';
   document.getElementById('addRoleBtn').textContent = 'Creating...';
+});
+<?php if ($canEditPermissions): ?>
+document.getElementById('permissionForm').addEventListener('submit', function() {
+  document.getElementById('savePermissionBtn').disabled = true;
+  document.getElementById('savePermissionBtn').style.opacity = '0.7';
 });
 document.getElementById('overrideForm').addEventListener('submit', function() {
   document.getElementById('overrideBtn').disabled = true;
@@ -409,6 +641,7 @@ document.getElementById('rolePermsForm').addEventListener('submit', function() {
   document.getElementById('saveRolePermsBtn').style.opacity = '0.7';
   document.getElementById('saveRolePermsBtn').textContent = 'Saving privileges...';
 });
+<?php endif; ?>
 </script>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

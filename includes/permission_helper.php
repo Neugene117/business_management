@@ -4,6 +4,35 @@ require_once __DIR__ . '/auth.php';
  * Check if the user has a specific permission
  */
 function hasPermission($conn, $membershipId, $businessId, $permissionCode): bool {
+    // A preview is a read-only simulation and must be evaluated before the
+    // authenticated Super Admin bypass.
+    $previewRole = getPreviewRole();
+    if ($previewRole !== null) {
+        if ($previewRole === 'super_admin') {
+            return true;
+        }
+
+        if ($previewRole === 'owner') {
+            $scopeQuery = "SELECT 1 FROM permissions WHERE code = ? AND scope = 'BUSINESS' LIMIT 1";
+            $scopeStmt = mysqli_prepare($conn, $scopeQuery);
+            mysqli_stmt_bind_param($scopeStmt, 's', $permissionCode);
+            mysqli_stmt_execute($scopeStmt);
+            return mysqli_num_rows(mysqli_stmt_get_result($scopeStmt)) > 0;
+        }
+
+        $employeePermissions = [
+            'dashboard.view',
+            'sales.view',
+            'sales.create',
+            'purchases.view',
+            'purchases.create',
+            'inventory.view',
+            'employees.view',
+            'settings.view'
+        ];
+        return in_array($permissionCode, $employeePermissions, true);
+    }
+
     // 1. Super Admin bypasses all checks
     if (isSuperAdmin()) {
         return true;
@@ -64,6 +93,15 @@ function hasPermission($conn, $membershipId, $businessId, $permissionCode): bool
  * Enforce that the user has a specific permission, otherwise abort access
  */
 function requirePermission($conn, $membershipId, $businessId, $permissionCode): void {
+    // Preview mode can show permitted UI and pages but can never mutate data.
+    if (isRolePreviewActive() && ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
+        http_response_code(403);
+        require_once __DIR__ . '/flash.php';
+        setFlashMessage('error', 'Role preview is read-only. No changes were made.');
+        header('Location: ' . getRootPrefix() . 'pages/dashboard/index.php' . getRolePreviewQuery());
+        exit('Access denied. Role preview is read-only.');
+    }
+
     if (!hasPermission($conn, $membershipId, $businessId, $permissionCode)) {
         http_response_code(403);
         
@@ -84,6 +122,20 @@ function requirePermission($conn, $membershipId, $businessId, $permissionCode): 
         
         header("Location: " . $prefix . "pages/dashboard/index.php");
         exit('Access denied. Missing permission: ' . $permissionCode);
+    }
+}
+
+/**
+ * Enforce operations that are reserved for the authenticated Super Admin.
+ * A preview never grants real administrative authority.
+ */
+function requireSuperAdmin(): void {
+    if (!isSuperAdmin() || isRolePreviewActive()) {
+        http_response_code(403);
+        require_once __DIR__ . '/flash.php';
+        setFlashMessage('error', 'Only the Super Admin can perform this action.');
+        header('Location: ' . getRootPrefix() . 'pages/dashboard/index.php' . getRolePreviewQuery());
+        exit('Access denied. Super Admin permission required.');
     }
 }
 ?>

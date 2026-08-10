@@ -113,7 +113,9 @@ mysqli_stmt_execute($bStmt);
 $bizCur = mysqli_fetch_assoc(mysqli_stmt_get_result($bStmt))['currency_code'] ?? 'RWF';
 
 $csrfToken = generateCsrfToken();
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$role_query = getRolePreviewQuery();
+$canCreateSale = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['create']);
+$canVoidSale = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['void']);
 ?>
 <div>
   <!-- Left Column: Table List -->
@@ -121,7 +123,9 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     <div class="card-header" style="flex-wrap: wrap; gap: 12px; display: flex; justify-content: space-between; align-items: center;">
       <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
         <div class="card-title">Customer Sales Orders History</div>
-        <button class="btn-primary" onclick="openAddModal()">+ Add Sales Order</button>
+        <?php if ($canCreateSale): ?>
+          <button class="btn-primary" onclick="openAddModal()">+ Add Sales Order</button>
+        <?php endif; ?>
       </div>
       <form method="GET" action="index.php" style="display: flex; gap: 8px; align-items: center;">
         <?php if (isset($_GET['role'])): ?>
@@ -178,7 +182,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
                 <div style="display:inline-flex; gap: 4px;">
                   <button class="btn-sm" onclick="viewDetails(<?php echo (int)$row['id']; ?>)">Invoice</button>
                   
-                  <?php if ($row['status'] === 'COMPLETED'): ?>
+                  <?php if ($row['status'] === 'COMPLETED' && $canVoidSale): ?>
                     <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('VOID this sale? Stocks will be added back and GP reversed. This cannot be undone.');">
                       <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
                       <input type="hidden" name="action" value="void_sale">

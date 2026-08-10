@@ -6,17 +6,9 @@ require_once __DIR__ . '/../../includes/header.php';
 $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
-// Role determination logic
-$user_role = 'owner'; // Default fallback
-if (isSuperAdmin()) {
-    $user_role = 'super_admin';
-} elseif (isset($_SESSION['roles'])) {
-    if (in_array('employee', $_SESSION['roles'])) {
-        $user_role = 'employee';
-    }
-}
-
-$role_query = '';
+// Render the real role, or the Super Admin's validated read-only preview role.
+$user_role = getEffectiveUserRole();
+$role_query = getRolePreviewQuery();
 $businessId = $_SESSION['active_business_id'] ?? 0;
 ?>
 

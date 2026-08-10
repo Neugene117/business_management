@@ -6,6 +6,7 @@ $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
 $businessId = $_SESSION['active_business_id'] ?? 0;
+$canUpdateSettings = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
 
 // Fetch business details
 $bizQuery = "SELECT * FROM businesses WHERE id = ? LIMIT 1";
@@ -40,7 +41,7 @@ if (!$acct) {
 }
 
 $csrfToken = generateCsrfToken();
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$role_query = getRolePreviewQuery();
 ?>
 
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start;">
@@ -196,6 +197,11 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
 </div>
 
 <script>
+<?php if (!$canUpdateSettings): ?>
+document.querySelectorAll('#profileForm input:not([type="hidden"]), #profileForm select, #profileForm textarea, #profileForm button[type="submit"], #acctForm input:not([type="hidden"]), #acctForm select, #acctForm textarea, #acctForm button[type="submit"]').forEach(function (element) {
+  element.disabled = true;
+});
+<?php endif; ?>
 // Safeguard double submissions client-side
 document.getElementById('profileForm').addEventListener('submit', function() {
   document.getElementById('profileBtn').disabled = true;

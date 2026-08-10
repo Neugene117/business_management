@@ -15,7 +15,7 @@
   <div class="topbar-title-area">
     <div class="topbar-page-title"><?php echo e($active_page_title); ?></div>
     <div class="breadcrumb">
-      <a href="<?php echo $root_prefix; ?>pages/dashboard/index.php<?php echo isset($_GET['role']) ? '?role='.e($_GET['role']) : ''; ?>">Home</a>
+      <a href="<?php echo $root_prefix; ?>pages/dashboard/index.php<?php echo e(getRolePreviewQuery()); ?>">Home</a>
       <span class="sep">/</span>
       <span class="cur"><?php echo e($active_page_title); ?></span>
     </div>
@@ -29,6 +29,15 @@
   </div>
   
   <div class="topbar-right">
+    <?php if (isSuperAdmin()): ?>
+      <?php $previewRole = getPreviewRole(); ?>
+      <nav class="role-switcher" aria-label="Testing Widget">
+        <span class="role-switcher-title">Testing Widget:</span>
+        <a class="role-btn<?php echo $previewRole === 'super_admin' ? ' active' : ''; ?>" href="<?php echo e(getRolePreviewUrl('super_admin')); ?>">Super Admin</a>
+        <a class="role-btn<?php echo $previewRole === 'owner' ? ' active' : ''; ?>" href="<?php echo e(getRolePreviewUrl('owner')); ?>">Business Owner</a>
+        <a class="role-btn<?php echo $previewRole === 'employee' ? ' active' : ''; ?>" href="<?php echo e(getRolePreviewUrl('employee')); ?>">Employee</a>
+      </nav>
+    <?php endif; ?>
     <div class="notif-wrap" style="position: relative;">
       <button class="icon-btn" title="Notifications" id="notifBtn" onclick="toggleNotifDropdown()">
         <svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0"/></svg>
@@ -110,7 +119,7 @@
             <?php echo e($_SESSION['email'] ?? ''); ?>
           </div>
         </div>
-        <a href="<?php echo $root_prefix; ?>pages/settings/index.php<?php echo isset($_GET['role']) ? '?role='.e($_GET['role']) : ''; ?>" class="dropdown-item" style="text-decoration: none; color: inherit; display: flex; align-items: center; width: 100%; gap: 10px;">
+        <a href="<?php echo $root_prefix; ?>pages/settings/index.php<?php echo e(getRolePreviewQuery()); ?>" class="dropdown-item" style="text-decoration: none; color: inherit; display: flex; align-items: center; width: 100%; gap: 10px;">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M2 12h2M20 12h2M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41"/></svg>
           Settings
         </a>

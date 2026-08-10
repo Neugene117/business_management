@@ -8,21 +8,8 @@ requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_b
 $businessId = $_SESSION['active_business_id'] ?? 0;
 $membershipId = $_SESSION['membership_id'] ?? 0;
 
-// Determine role
-$is_owner = false;
-if (isSuperAdmin() || ($_SESSION['member_type'] ?? '') === 'OWNER') {
-    $is_owner = true;
-}
-
-// Allow tester override
-if (isset($_GET['role'])) {
-    $override = strtolower($_GET['role']);
-    if ($override === 'owner' || $override === 'super_admin') {
-        $is_owner = true;
-    } else {
-        $is_owner = false;
-    }
-}
+// Use the authenticated role or the validated Super Admin preview role.
+$is_owner = in_array(getEffectiveUserRole(), ['owner', 'super_admin'], true);
 
 // Ensure leave types exist, otherwise seed defaults
 $checkTypes = "SELECT COUNT(*) as cnt FROM leave_types WHERE business_id = ?";
@@ -31,7 +18,7 @@ mysqli_stmt_bind_param($ctStmt, 'i', $businessId);
 mysqli_stmt_execute($ctStmt);
 $typesCnt = mysqli_fetch_assoc(mysqli_stmt_get_result($ctStmt))['cnt'] ?? 0;
 
-if ($typesCnt == 0) {
+if ($typesCnt == 0 && !isRolePreviewActive() && $businessId > 0) {
     // Seed defaults
     $seed1 = "INSERT INTO leave_types (business_id, code, name, default_days_per_year, is_paid, requires_approval, is_active, created_at) VALUES (?, 'ANNUAL', 'Annual Leave', 21.00, 1, 1, 1, NOW(6))";
     $s1 = mysqli_prepare($conn, $seed1);
@@ -57,7 +44,7 @@ mysqli_stmt_execute($ltStmt);
 $leave_types_list = mysqli_stmt_get_result($ltStmt);
 
 $csrfToken = generateCsrfToken();
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$role_query = getRolePreviewQuery();
 ?>
 
 <?php if ($is_owner): ?>

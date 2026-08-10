@@ -1,15 +1,7 @@
 <?php
-// Detect user role from session, fallback to owner.
-$user_role = 'owner';
-if (isset($_SESSION['platform_context']) && $_SESSION['platform_context'] === 'SUPER_ADMIN') {
-    $user_role = 'super_admin';
-} elseif (isset($_SESSION['roles'])) {
-    if (in_array('employee', $_SESSION['roles'])) {
-        $user_role = 'employee';
-    }
-}
-
-$role_query = '';
+// Render the real role, or the Super Admin's validated read-only preview role.
+$user_role = getEffectiveUserRole();
+$role_query = getRolePreviewQuery();
 $dash_link = $root_prefix . 'pages/dashboard/index.php' . $role_query;
 $settings_link = $root_prefix . 'pages/settings/index.php' . $role_query;
 ?>

@@ -7,6 +7,10 @@ requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_b
 
 $businessId = $_SESSION['active_business_id'] ?? 0;
 $active_tab = $_GET['tab'] ?? 'balances';
+$canAdjustInventory = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['adjust']);
+if ($active_tab === 'adjust' && !$canAdjustInventory) {
+    requirePermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['adjust']);
+}
 
 // Pagination helper
 $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
@@ -43,14 +47,16 @@ mysqli_stmt_execute($bStmt);
 $bizCur = mysqli_fetch_assoc(mysqli_stmt_get_result($bStmt))['currency_code'] ?? 'RWF';
 
 $csrfToken = generateCsrfToken();
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$role_query = getRolePreviewQuery();
 ?>
 
 <!-- Tab Selector -->
 <div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
   <a href="index.php?tab=balances<?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>" class="btn-sm <?php echo ($active_tab === 'balances') ? 'active' : ''; ?>" style="text-decoration:none;">Stock Balances</a>
   <a href="index.php?tab=movements<?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>" class="btn-sm <?php echo ($active_tab === 'movements') ? 'active' : ''; ?>" style="text-decoration:none;">Stock Movements History</a>
-  <a href="index.php?tab=adjust<?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>" class="btn-sm <?php echo ($active_tab === 'adjust') ? 'active' : ''; ?>" style="text-decoration:none;">Stock Adjustment</a>
+  <?php if ($canAdjustInventory): ?>
+    <a href="index.php?tab=adjust<?php echo getPreviewRole() !== null ? '&role='.e(getPreviewRole()) : ''; ?>" class="btn-sm <?php echo ($active_tab === 'adjust') ? 'active' : ''; ?>" style="text-decoration:none;">Stock Adjustment</a>
+  <?php endif; ?>
 </div>
 
 <!-- ==========================================

@@ -2,6 +2,7 @@
 return [
     'view'   => 'employees.permissions.manage',
     'create' => 'employees.permissions.manage',
-    'update' => 'employees.permissions.manage'
+    'update' => 'employees.permissions.manage',
+    'delete' => 'employees.permissions.manage'
 ];
 ?>
