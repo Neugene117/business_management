@@ -42,21 +42,57 @@ switch ($action) {
         }
 
         $query = "
-            INSERT INTO customers (business_id, name, phone, email, tax_number, address, is_active, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, ?, ?, 1, NOW(6), NOW(6))
+            INSERT INTO customers (
+                business_id,
+                name,
+                phone,
+                email,
+                tax_number,
+                address,
+                is_active,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, NOW(6), NOW(6))
         ";
+
         $stmt = mysqli_prepare($conn, $query);
-        mysqli_stmt_bind_param($stmt, 'issssss', $businessId, $name, $phone, $email, $tax_number, $address);
-        if (mysqli_stmt_execute($stmt)) {
-            $customerId = mysqli_insert_id($conn);
-            writeAuditLog($conn, $businessId, 'CUSTOMER_CREATED', 'customer', $customerId, [
-                'name' => $name,
-                'phone' => $phone,
-                'tax_number' => $tax_number
-            ]);
-            setFlashMessage('success', 'Customer registered successfully.');
+
+        if (!$stmt) {
+            setFlashMessage('error', 'Failed to prepare customer registration.');
         } else {
-            setFlashMessage('error', 'Failed to register customer.');
+            mysqli_stmt_bind_param(
+                $stmt,
+                'isssss',
+                $businessId,
+                $name,
+                $phone,
+                $email,
+                $tax_number,
+                $address
+            );
+
+            if (mysqli_stmt_execute($stmt)) {
+                $customerId = mysqli_insert_id($conn);
+
+                writeAuditLog(
+                    $conn,
+                    $businessId,
+                    'CUSTOMER_CREATED',
+                    'customer',
+                    $customerId,
+                    [
+                        'name' => $name,
+                        'phone' => $phone,
+                        'tax_number' => $tax_number
+                    ]
+                );
+
+                setFlashMessage('success', 'Customer registered successfully.');
+            } else {
+                setFlashMessage('error', 'Failed to register customer.');
+            }
+
+            mysqli_stmt_close($stmt);
         }
         header("Location: index.php" . $role_query);
         exit();
