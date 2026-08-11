@@ -65,6 +65,12 @@ mysqli_stmt_bind_param($catStmt, 'i', $businessId);
 mysqli_stmt_execute($catStmt);
 $catResult = mysqli_stmt_get_result($catStmt);
 
+$uomResult = mysqli_query($conn, 'SELECT code, name FROM units_of_measure ORDER BY name');
+$uomOptions = [];
+while ($uomRow = mysqli_fetch_assoc($uomResult)) {
+    $uomOptions[] = $uomRow;
+}
+
 // Fetch business currency
 $bizQuery = "SELECT currency_code FROM businesses WHERE id = ? LIMIT 1";
 $bStmt = mysqli_prepare($conn, $bizQuery);
@@ -232,7 +238,9 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
         <div class="field" style="margin-bottom: 12px;">
           <label for="p_uom">Unit of Measure (UOM) <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
-            <input type="text" name="uom" id="p_uom" value="GRAM" placeholder="e.g. GRAM, UNIT, KG" required>
+            <select name="uom" id="p_uom" required>
+              <?php foreach ($uomOptions as $uomOption): ?><option value="<?php echo e($uomOption['code']); ?>" <?php echo $uomOption['code'] === 'UNIT' ? 'selected' : ''; ?>><?php echo e($uomOption['name']); ?> (<?php echo e($uomOption['code']); ?>)</option><?php endforeach; ?>
+            </select>
           </div>
         </div>
 
@@ -309,7 +317,9 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
         <div class="field" style="margin-bottom: 12px;">
           <label for="edit_uom">Unit of Measure (UOM) <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
-            <input type="text" name="uom" id="edit_uom" required>
+            <select name="uom" id="edit_uom" required>
+              <?php foreach ($uomOptions as $uomOption): ?><option value="<?php echo e($uomOption['code']); ?>"><?php echo e($uomOption['name']); ?> (<?php echo e($uomOption['code']); ?>)</option><?php endforeach; ?>
+            </select>
           </div>
         </div>
 

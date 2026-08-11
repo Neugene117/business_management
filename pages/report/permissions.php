@@ -2,6 +2,7 @@
 return [
     'view' => 'reports.view',
     'generate' => 'reports.generate',
-    'export' => 'reports.export'
+    'export' => 'reports.export',
+    'schedule' => 'reports.schedule'
 ];
 ?>

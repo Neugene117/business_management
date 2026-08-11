@@ -99,10 +99,8 @@ $canSuspendEmployee = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
     <table class="data-table">
       <thead>
         <tr>
-          <th>EMP ID</th>
+          <th>No.</th>
           <th>Employee Name</th>
-          <th>Job Title</th>
-          <th>Department</th>
           <th>Roles</th>
           <th>Status</th>
           <th style="text-align: right;">Action</th>
@@ -111,20 +109,18 @@ $canSuspendEmployee = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
       <tbody>
         <?php if (mysqli_num_rows($result) === 0): ?>
           <tr>
-            <td colspan="7" style="text-align: center; color: var(--text3); padding: 30px;">
+            <td colspan="5" style="text-align: center; color: var(--text3); padding: 30px;">
               No employee accounts registered yet.
             </td>
           </tr>
         <?php else: ?>
-          <?php while ($row = mysqli_fetch_assoc($result)): ?>
+          <?php $displaySequence = $offset + 1; while ($row = mysqli_fetch_assoc($result)): ?>
             <tr>
-              <td><span class="code-badge"><?php echo e($row['employee_number'] ?? 'N/A'); ?></span></td>
+              <td><?php echo $displaySequence++; ?></td>
               <td class="td-name">
                 <div style="font-weight: 500; color: var(--text);"><?php echo e($row['first_name'] . ' ' . $row['last_name']); ?></div>
                 <div style="font-size: 10px; color: var(--text3);"><?php echo e($row['email'] ?? 'No email'); ?></div>
               </td>
-              <td><?php echo e($row['job_title'] ?? 'N/A'); ?></td>
-              <td><?php echo e($row['department'] ?? 'N/A'); ?></td>
               <td><span style="font-size: 11px; color: var(--blue); font-weight: 500;"><?php echo e($row['assigned_roles'] ?? 'No Role'); ?></span></td>
               <td>
                 <?php if ($row['membership_status'] === 'ACTIVE'): ?>

@@ -37,11 +37,22 @@ switch ($action) {
         $sale_price = (float)($_POST['sale_price'] ?? 0.0);
         $reorder_level = (float)($_POST['reorder_level'] ?? 0.0);
 
-        if (empty($sku) || empty($name) || empty($uom)) {
-            setFlashMessage('error', 'SKU, name, and UOM are required.');
+        if (empty($sku) || empty($name) || empty($uom) || $cost_price < 0 || $sale_price < 0 || $reorder_level < 0) {
+            setFlashMessage('error', 'SKU, name, UOM, and non-negative prices are required.');
             header("Location: index.php" . $role_query);
             exit();
         }
+
+        $uomStmt = mysqli_prepare($conn, 'SELECT id FROM units_of_measure WHERE code = ? LIMIT 1');
+        mysqli_stmt_bind_param($uomStmt, 's', $uom);
+        mysqli_stmt_execute($uomStmt);
+        $uomRow = mysqli_fetch_assoc(mysqli_stmt_get_result($uomStmt));
+        if (!$uomRow) {
+            setFlashMessage('error', 'Select a valid unit of measure.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+        $uomId = (int)$uomRow['id'];
 
         // Validate SKU uniqueness for this business
         $chkQuery = "SELECT id FROM products WHERE business_id = ? AND sku = ? LIMIT 1";
@@ -56,15 +67,16 @@ switch ($action) {
 
         $query = "
             INSERT INTO products (
-                business_id, sku, name, category, uom, 
-                cost_price, sale_price, reorder_level, is_active, created_at, updated_at
+                business_id, sku, name, category, uom, uom_id,
+                default_purchase_price, default_selling_price, cost_price, sale_price,
+                reorder_level, is_active, created_at, updated_at
             ) VALUES (
-                ?, ?, ?, ?, ?, 
-                ?, ?, ?, 1, NOW(6), NOW(6)
+                ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, 1, NOW(6), NOW(6)
             )
         ";
         $stmt = mysqli_prepare($conn, $query);
-        mysqli_stmt_bind_param($stmt, 'issssddd', $businessId, $sku, $name, $category, $uom, $cost_price, $sale_price, $reorder_level);
+        mysqli_stmt_bind_param($stmt, 'issssiddddd', $businessId, $sku, $name, $category, $uom, $uomId, $cost_price, $sale_price, $cost_price, $sale_price, $reorder_level);
         if (mysqli_stmt_execute($stmt)) {
             $productId = mysqli_insert_id($conn);
             writeAuditLog($conn, $businessId, 'PRODUCT_CREATED', 'product', $productId, [
@@ -92,11 +104,22 @@ switch ($action) {
         $sale_price = (float)($_POST['sale_price'] ?? 0.0);
         $reorder_level = (float)($_POST['reorder_level'] ?? 0.0);
 
-        if (empty($productId) || empty($sku) || empty($name) || empty($uom)) {
-            setFlashMessage('error', 'SKU, name, and UOM are required.');
+        if (empty($productId) || empty($sku) || empty($name) || empty($uom) || $cost_price < 0 || $sale_price < 0 || $reorder_level < 0) {
+            setFlashMessage('error', 'SKU, name, UOM, and non-negative prices are required.');
             header("Location: index.php" . $role_query);
             exit();
         }
+
+        $uomStmt = mysqli_prepare($conn, 'SELECT id FROM units_of_measure WHERE code = ? LIMIT 1');
+        mysqli_stmt_bind_param($uomStmt, 's', $uom);
+        mysqli_stmt_execute($uomStmt);
+        $uomRow = mysqli_fetch_assoc(mysqli_stmt_get_result($uomStmt));
+        if (!$uomRow) {
+            setFlashMessage('error', 'Select a valid unit of measure.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
+        $uomId = (int)$uomRow['id'];
 
         // Validate SKU uniqueness except current
         $chkQuery = "SELECT id FROM products WHERE business_id = ? AND sku = ? AND id != ? LIMIT 1";
@@ -124,12 +147,13 @@ switch ($action) {
 
         $query = "
             UPDATE products 
-            SET sku = ?, name = ?, category = ?, uom = ?, 
-                cost_price = ?, sale_price = ?, reorder_level = ?, updated_at = NOW(6) 
+            SET sku = ?, name = ?, category = ?, uom = ?, uom_id = ?,
+                default_purchase_price = ?, default_selling_price = ?,
+                cost_price = ?, sale_price = ?, reorder_level = ?, updated_at = NOW(6)
             WHERE id = ? AND business_id = ?
         ";
         $stmt = mysqli_prepare($conn, $query);
-        mysqli_stmt_bind_param($stmt, 'ssssdddii', $sku, $name, $category, $uom, $cost_price, $sale_price, $reorder_level, $productId, $businessId);
+        mysqli_stmt_bind_param($stmt, 'ssssidddddii', $sku, $name, $category, $uom, $uomId, $cost_price, $sale_price, $cost_price, $sale_price, $reorder_level, $productId, $businessId);
         if (mysqli_stmt_execute($stmt)) {
             writeAuditLog($conn, $businessId, 'PRODUCT_UPDATED', 'product', $productId, [
                 'sku' => $sku,

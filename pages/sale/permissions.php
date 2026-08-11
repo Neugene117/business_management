@@ -2,6 +2,7 @@
 return [
     'view'   => 'sales.view',
     'create' => 'sales.create',
-    'void'   => 'sales.void'
+    'void'   => 'sales.void',
+    'refund' => 'sales.refund'
 ];
 ?>

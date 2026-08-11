@@ -1,309 +1,172 @@
 <?php
 $page_title = 'Stock & Costing Management';
 require_once __DIR__ . '/../../includes/header.php';
-
 $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
-$businessId = $_SESSION['active_business_id'] ?? 0;
-$active_tab = $_GET['tab'] ?? 'balances';
-$canAdjustInventory = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['adjust']);
-if ($active_tab === 'adjust' && !$canAdjustInventory) {
-    requirePermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['adjust']);
+$businessId = (int)($_SESSION['active_business_id'] ?? 0);
+$membershipId = (int)($_SESSION['membership_id'] ?? 0);
+$activeTab = (string)($_GET['tab'] ?? 'balances');
+$hasBusinessContext = $businessId > 0;
+$config = [
+    'timezone' => 'Africa/Kigali',
+    'inventory_valuation_method' => 'WEIGHTED_AVERAGE',
+    'default_tax_rate' => 0.0,
+    'allow_negative_stock' => 0
+];
+if ($hasBusinessContext) {
+    try {
+        $config = getBusinessInventoryConfig($conn, $businessId);
+    } catch (RuntimeException $error) {
+        if (!isSuperAdmin()) {
+            throw $error;
+        }
+        $hasBusinessContext = false;
+        $businessId = 0;
+    }
 }
-
-// Pagination helper
-$page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+if (!$hasBusinessContext && $activeTab === 'adjust') {
+    $activeTab = 'balances';
+}
+$localNow = new DateTimeImmutable('now', new DateTimeZone($config['timezone']));
+$stockFrom = trim((string)($_GET['from'] ?? $localNow->format('Y-m-01')));
+$stockTo = trim((string)($_GET['to'] ?? $localNow->format('Y-m-d')));
+try { $period = getBusinessPeriodBounds($stockFrom, $stockTo, $config['timezone']); }
+catch (Throwable $error) {
+    $stockFrom = $localNow->format('Y-m-01'); $stockTo = $localNow->format('Y-m-d');
+    $period = getBusinessPeriodBounds($stockFrom, $stockTo, $config['timezone']);
+}
+$stockPeriodStart = $period['start_utc'];
+$stockPeriodEnd = $period['end_utc'];
+$page = max(1, (int)($_GET['page'] ?? 1));
 $limit = 20;
 $offset = ($page - 1) * $limit;
+$canAdjust = $hasBusinessContext && hasPermission($conn, $membershipId, $businessId, $permissions['adjust']);
+$canStockTake = $hasBusinessContext && hasPermission($conn, $membershipId, $businessId, $permissions['stocktake']);
+$canApprove = $hasBusinessContext && hasPermission($conn, $membershipId, $businessId, $permissions['approve']);
+if ($activeTab === 'adjust' && !$canAdjust && !$canStockTake && !$canApprove) requirePermission($conn, $membershipId, $businessId, $permissions['adjust']);
 
-// Fetch active products for dropdowns
-$prodQ = "SELECT id, name, sku, cost_price, uom FROM products WHERE business_id = ? AND is_active = 1 ORDER BY name ASC";
-$pStmt = mysqli_prepare($conn, $prodQ);
-mysqli_stmt_bind_param($pStmt, 'i', $businessId);
-mysqli_stmt_execute($pStmt);
-$prodResult = mysqli_stmt_get_result($pStmt);
-$products_list = [];
-while ($pRow = mysqli_fetch_assoc($prodResult)) {
-    $products_list[] = $pRow;
-}
-
-// Fetch active locations for dropdowns
-$locQ = "SELECT id, name, code FROM business_locations WHERE business_id = ? AND is_active = 1 ORDER BY name ASC";
-$lStmt = mysqli_prepare($conn, $locQ);
-mysqli_stmt_bind_param($lStmt, 'i', $businessId);
-mysqli_stmt_execute($lStmt);
-$locResult = mysqli_stmt_get_result($lStmt);
-$locations_list = [];
-while ($lRow = mysqli_fetch_assoc($locResult)) {
-    $locations_list[] = $lRow;
-}
-
-// Fetch business currency
-$bizQuery = "SELECT currency_code FROM businesses WHERE id = ? LIMIT 1";
-$bStmt = mysqli_prepare($conn, $bizQuery);
-mysqli_stmt_bind_param($bStmt, 'i', $businessId);
-mysqli_stmt_execute($bStmt);
-$bizCur = mysqli_fetch_assoc(mysqli_stmt_get_result($bStmt))['currency_code'] ?? 'RWF';
-
+$productStmt = mysqli_prepare($conn, 'SELECT id,name,sku,uom,cost_price,track_batches,track_expiry FROM products WHERE business_id=? AND is_active=1 ORDER BY name');
+mysqli_stmt_bind_param($productStmt, 'i', $businessId); mysqli_stmt_execute($productStmt);
+$products = []; $productResult = mysqli_stmt_get_result($productStmt);
+while ($row = mysqli_fetch_assoc($productResult)) $products[] = $row;
+$locationStmt = mysqli_prepare($conn, 'SELECT id,name,code FROM business_locations WHERE business_id=? AND is_active=1 ORDER BY name');
+mysqli_stmt_bind_param($locationStmt, 'i', $businessId); mysqli_stmt_execute($locationStmt);
+$locations = []; $locationResult = mysqli_stmt_get_result($locationStmt);
+while ($row = mysqli_fetch_assoc($locationResult)) $locations[] = $row;
+$batchStmt = mysqli_prepare($conn, 'SELECT pb.id,pb.product_id,pb.lot_number,pb.expires_at,bib.location_id,bib.available_quantity FROM product_batches pb LEFT JOIN batch_inventory_balances bib ON bib.batch_id=pb.id AND bib.business_id=pb.business_id WHERE pb.business_id=? ORDER BY pb.product_id,pb.expires_at,pb.lot_number');
+mysqli_stmt_bind_param($batchStmt, 'i', $businessId); mysqli_stmt_execute($batchStmt);
+$batches = []; $batchResult = mysqli_stmt_get_result($batchStmt);
+while ($row = mysqli_fetch_assoc($batchResult)) $batches[] = $row;
+$currencyStmt = mysqli_prepare($conn, 'SELECT currency_code FROM businesses WHERE id=?');
+mysqli_stmt_bind_param($currencyStmt, 'i', $businessId); mysqli_stmt_execute($currencyStmt);
+$currency = mysqli_fetch_assoc(mysqli_stmt_get_result($currencyStmt))['currency_code'] ?? 'RWF';
 $csrfToken = generateCsrfToken();
-$role_query = getRolePreviewQuery();
+$roleQuery = getRolePreviewQuery();
+$roleSuffix = getPreviewRole() !== null ? '&role=' . rawurlencode(getPreviewRole()) : '';
 ?>
 
-<!-- Tab Selector -->
-<div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
-  <a href="index.php?tab=balances<?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>" class="btn-sm <?php echo ($active_tab === 'balances') ? 'active' : ''; ?>" style="text-decoration:none;">Stock Balances</a>
-  <a href="index.php?tab=movements<?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>" class="btn-sm <?php echo ($active_tab === 'movements') ? 'active' : ''; ?>" style="text-decoration:none;">Stock Movements History</a>
-  <?php if ($canAdjustInventory): ?>
-    <a href="index.php?tab=adjust<?php echo getPreviewRole() !== null ? '&role='.e(getPreviewRole()) : ''; ?>" class="btn-sm <?php echo ($active_tab === 'adjust') ? 'active' : ''; ?>" style="text-decoration:none;">Stock Adjustment</a>
-  <?php endif; ?>
-</div>
-
-<!-- ==========================================
-     TAB: STOCK BALANCES
-     ========================================== -->
-<?php if ($active_tab === 'balances'): ?>
-  <?php
-  // Fetch stock balances
-  $balQuery = "
-      SELECT b.*, p.name as product_name, p.sku, p.uom, l.name as location_name, l.code as location_code
-      FROM inventory_balances b
-      JOIN products p ON b.product_id = p.id
-      JOIN business_locations l ON b.location_id = l.id
-      WHERE b.business_id = ?
-      ORDER BY p.name ASC, l.name ASC
-  ";
-  $stmt = mysqli_prepare($conn, $balQuery);
-  mysqli_stmt_bind_param($stmt, 'i', $businessId);
-  mysqli_stmt_execute($stmt);
-  $balResult = mysqli_stmt_get_result($stmt);
-  ?>
-  <div class="card">
-    <div class="card-header"><div class="card-title">Real-Time Inventory Levels &amp; Cost Valuation</div></div>
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>SKU Code</th>
-          <th>Product Name</th>
-          <th>Location</th>
-          <th>Qty On Hand</th>
-          <th>Avg Unit Cost (WAVG)</th>
-          <th>Cost Valuation</th>
-          <th>Last Calculated</th>
-        </tr>
-      </thead>
-      <tbody>
-        <?php if (mysqli_num_rows($balResult) === 0): ?>
-          <tr>
-            <td colspan="7" style="text-align: center; color: var(--text3); padding: 30px;">No inventory balances found. Perform purchase receipts or stock entries to increase stock.</td>
-          </tr>
-        <?php else: ?>
-          <?php while ($row = mysqli_fetch_assoc($balResult)): 
-              $val = $row['quantity_on_hand'] * $row['average_unit_cost'];
-          ?>
-            <tr>
-              <td><span class="code-badge"><?php echo e($row['sku']); ?></span></td>
-              <td class="td-name"><?php echo e($row['product_name']); ?></td>
-              <td><span class="code-badge" style="background:var(--bg); border:1px solid var(--border);"><?php echo e($row['location_code']); ?></span> <?php echo e($row['location_name']); ?></td>
-              <td class="td-bold"><?php echo (float)$row['quantity_on_hand']; ?> <span style="font-size:10px; font-weight:400; color:var(--text3);"><?php echo e($row['uom']); ?></span></td>
-              <td><?php echo formatCurrency($row['average_unit_cost'], $bizCur); ?></td>
-              <td class="td-bold" style="color:var(--blue);"><?php echo formatCurrency($val, $bizCur); ?></td>
-              <td style="font-size:11.5px; color:var(--text3);"><?php echo formatDate($row['last_calculated_at']); ?></td>
-            </tr>
-          <?php endwhile; ?>
-        <?php endif; ?>
-      </tbody>
-    </table>
-  </div>
-
-<!-- ==========================================
-     TAB: STOCK MOVEMENTS LOGS
-     ========================================== -->
-<?php elseif ($active_tab === 'movements'): ?>
-  <?php
-  // Fetch movements count
-  $cntMQuery = "SELECT COUNT(*) as total FROM inventory_movements WHERE business_id = ?";
-  $cmStmt = mysqli_prepare($conn, $cntMQuery);
-  mysqli_stmt_bind_param($cmStmt, 'i', $businessId);
-  mysqli_stmt_execute($cmStmt);
-  $total_rows = mysqli_fetch_assoc(mysqli_stmt_get_result($cmStmt))['total'] ?? 0;
-  $total_pages = ceil($total_rows / $limit);
-
-  // Fetch movements
-  $movQuery = "
-      SELECT m.*, p.name as product_name, p.sku, l.name as location_name, l.code as location_code, 
-             u.first_name, u.last_name
-      FROM inventory_movements m
-      JOIN products p ON m.product_id = p.id
-      JOIN business_locations l ON m.location_id = l.id
-      LEFT JOIN business_memberships bm ON m.created_by_membership_id = bm.id
-      LEFT JOIN users u ON bm.user_id = u.id
-      WHERE m.business_id = ?
-      ORDER BY m.occurred_at DESC
-      LIMIT ? OFFSET ?
-  ";
-  $stmt = mysqli_prepare($conn, $movQuery);
-  mysqli_stmt_bind_param($stmt, 'iii', $businessId, $limit, $offset);
-  mysqli_stmt_execute($stmt);
-  $movResult = mysqli_stmt_get_result($stmt);
-  ?>
-  <div class="card">
-    <div class="card-header"><div class="card-title">Inventory Movements Log Ledger</div></div>
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Occurred Date</th>
-          <th>SKU / Product</th>
-          <th>Location</th>
-          <th>Movement Type</th>
-          <th>Quantity Delta</th>
-          <th>Unit Cost</th>
-          <th>Recorded By</th>
-          <th>Notes</th>
-        </tr>
-      </thead>
-      <tbody>
-        <?php if (mysqli_num_rows($movResult) === 0): ?>
-          <tr>
-            <td colspan="8" style="text-align: center; color: var(--text3); padding: 30px;">No inventory movements recorded yet.</td>
-          </tr>
-        <?php else: ?>
-          <?php while ($row = mysqli_fetch_assoc($movResult)): 
-              $is_in = ($row['quantity_delta'] > 0);
-          ?>
-            <tr>
-              <td><?php echo formatDate($row['occurred_at']); ?></td>
-              <td class="td-name">
-                <div><?php echo e($row['product_name']); ?></div>
-                <span class="code-badge" style="font-size:10px;"><?php echo e($row['sku']); ?></span>
-              </td>
-              <td><span class="code-badge" style="background:var(--bg); border:1px solid var(--border);"><?php echo e($row['location_code']); ?></span></td>
-              <td><span class="code-badge" style="font-size:10px;"><?php echo e($row['movement_type']); ?></span></td>
-              <td class="td-bold" style="color: <?php echo $is_in ? 'var(--green)' : 'var(--red)'; ?>;">
-                <?php echo ($is_in ? '+' : '') . (float)$row['quantity_delta']; ?>
-              </td>
-              <td><?php echo formatCurrency($row['unit_cost'], $bizCur); ?></td>
-              <td><?php echo e($row['first_name'] ? ($row['first_name'] . ' ' . $row['last_name']) : 'System/Import'); ?></td>
-              <td style="font-size: 11.5px; color: var(--text3);"><?php echo e($row['notes'] ?? 'N/A'); ?></td>
-            </tr>
-          <?php endwhile; ?>
-        <?php endif; ?>
-      </tbody>
-    </table>
-
-    <!-- Pagination links -->
-    <?php if ($total_pages > 1): ?>
-      <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px; border-top: 1px solid var(--table-border);">
-        <span style="font-size:12px; color: var(--text3);">Showing page <?php echo $page; ?> of <?php echo $total_pages; ?> (<?php echo $total_rows; ?> entries)</span>
-        <div style="display: flex; gap: 4px;">
-          <?php if ($page > 1): ?>
-            <a class="btn-sm" style="text-decoration:none;" href="index.php?tab=movements&page=<?php echo ($page - 1); ?><?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>">Previous</a>
-          <?php endif; ?>
-          <?php for ($i = 1; $i <= $total_pages; $i++): ?>
-            <a class="btn-sm <?php echo ($i === $page) ? 'active' : ''; ?>" style="text-decoration:none;" href="index.php?tab=movements&page=<?php echo $i; ?><?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>"><?php echo $i; ?></a>
-          <?php endfor; ?>
-          <?php if ($page < $total_pages): ?>
-            <a class="btn-sm" style="text-decoration:none;" href="index.php?tab=movements&page=<?php echo ($page + 1); ?><?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>">Next</a>
-          <?php endif; ?>
-        </div>
-      </div>
-    <?php endif; ?>
-  </div>
-
-<!-- ==========================================
-     TAB: STOCK ADJUSTMENT FORM
-     ========================================== -->
-<?php elseif ($active_tab === 'adjust'): ?>
-  <div class="card" style="max-width: 500px; margin: 0 auto;">
-    <div class="card-header"><div class="card-title">Record Manual Inventory Adjustment</div></div>
-    
-    <form action="backend.php<?php echo $role_query; ?>" method="POST" style="padding: 20px;" id="adjustForm">
-      <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
-      <input type="hidden" name="action" value="adjust">
-
-      <div class="field" style="margin-bottom: 12px;">
-        <label for="p_id">Select Product <span style="color:var(--red);">*</span></label>
-        <div class="field-wrap">
-          <select name="product_id" id="p_id" required onchange="updateDefaultCost()">
-            <option value="">-- Choose Product --</option>
-            <?php foreach ($products_list as $p): ?>
-              <option value="<?php echo (int)$p['id']; ?>" data-cost="<?php echo (float)$p['cost_price']; ?>"><?php echo e($p['name']); ?> (<?php echo e($p['sku']); ?>)</option>
-            <?php endforeach; ?>
-          </select>
-        </div>
-      </div>
-
-      <div class="field" style="margin-bottom: 12px;">
-        <label for="l_id">Target Location <span style="color:var(--red);">*</span></label>
-        <div class="field-wrap">
-          <select name="location_id" id="l_id" required>
-            <option value="">-- Choose Location --</option>
-            <?php foreach ($locations_list as $l): ?>
-              <option value="<?php echo (int)$l['id']; ?>"><?php echo e($l['name']); ?> [<?php echo e($l['code']); ?>]</option>
-            <?php endforeach; ?>
-          </select>
-        </div>
-      </div>
-
-      <div class="field" style="margin-bottom: 12px;">
-        <label for="adj_type">Adjustment Type <span style="color:var(--red);">*</span></label>
-        <div class="field-wrap">
-          <select name="movement_type" id="adj_type" required>
-            <option value="MANUAL_IN">MANUAL IN (Increase Stock)</option>
-            <option value="MANUAL_OUT">MANUAL OUT (Decrease Stock)</option>
-            <option value="STOCKTAKE_GAIN">STOCKTAKE GAIN (Increase)</option>
-            <option value="STOCKTAKE_LOSS">STOCKTAKE LOSS (Decrease)</option>
-            <option value="DAMAGE">DAMAGE (Decrease)</option>
-            <option value="EXPIRY">EXPIRY (Decrease)</option>
-            <option value="CORRECTION_IN">CORRECTION IN (Increase)</option>
-            <option value="CORRECTION_OUT">CORRECTION OUT (Decrease)</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="field" style="margin-bottom: 12px;">
-        <label for="qty">Quantity <span style="color:var(--red);">*</span></label>
-        <div class="field-wrap">
-          <input type="number" name="quantity" id="qty" step="0.0001" min="0.0001" placeholder="0.0000" required>
-        </div>
-      </div>
-
-      <div class="field" style="margin-bottom: 12px;">
-        <label for="u_cost">Unit Cost / Price Value (<?php echo e($bizCur); ?>) <span style="color:var(--red);">*</span></label>
-        <div class="field-wrap">
-          <input type="number" name="unit_cost" id="u_cost" step="0.0001" min="0" placeholder="0.0000" required>
-        </div>
-      </div>
-
-      <div class="field" style="margin-bottom: 16px;">
-        <label for="notes">Adjustment Reason Notes <span style="color:var(--red);">*</span></label>
-        <div class="field-wrap">
-          <textarea name="notes" id="notes" required placeholder="Describe why this manual adjustment is being recorded (e.g. broken seal, monthly audit stocktake count discrepancy)..." style="width:100%; border:1px solid var(--border); border-radius: var(--radius); padding: 8px; background:var(--card); color:var(--text); resize:vertical; min-height:60px;"></textarea>
-        </div>
-      </div>
-
-      <button type="submit" class="btn-primary" style="width: 100%; border:none; padding:10px; cursor:pointer;" id="submitBtn">
-        Record Stock Adjustment
-      </button>
-    </form>
-  </div>
-  
-  <script>
-  function updateDefaultCost() {
-    const sel = document.getElementById('p_id');
-    const cost = sel.options[sel.selectedIndex].getAttribute('data-cost');
-    if (cost) {
-      document.getElementById('u_cost').value = parseFloat(cost).toFixed(4);
-    }
-  }
-  
-  document.getElementById('adjustForm').addEventListener('submit', function() {
-    const btn = document.getElementById('submitBtn');
-    btn.disabled = true;
-    btn.style.opacity = '0.7';
-    btn.textContent = 'Posting stock adjustment entry...';
-  });
-  </script>
+<?php if (!$hasBusinessContext): ?>
+<div class="business-context-notice" role="status"><strong>Inventory preview</strong><span>No active business is attached to this platform session, so inventory data and stock-management actions are unavailable.</span></div>
 <?php endif; ?>
 
+<nav class="inventory-tabs" aria-label="Inventory sections">
+  <a href="index.php?tab=balances<?php echo $roleSuffix; ?>" class="btn-sm <?php echo $activeTab === 'balances' ? 'active' : ''; ?>">Stock Balances</a>
+  <a href="index.php?tab=movements<?php echo $roleSuffix; ?>" class="btn-sm <?php echo $activeTab === 'movements' ? 'active' : ''; ?>">Stock Movements History</a>
+  <?php if ($canAdjust || $canStockTake || $canApprove): ?><a href="index.php?tab=adjust<?php echo $roleSuffix; ?>" class="btn-sm <?php echo $activeTab === 'adjust' ? 'active' : ''; ?>">Stock Adjustment</a><?php endif; ?>
+</nav>
+
+<?php if ($activeTab === 'balances'): ?>
+<?php
+$balanceQuery = "
+ SELECT b.location_id,b.product_id,b.updated_at,p.name product_name,p.sku,p.uom,l.name location_name,l.code location_code,
+  COALESCE(SUM(CASE WHEN m.occurred_at<? THEN m.quantity_delta ELSE 0 END),0) opening_stock,
+  COALESCE(SUM(CASE WHEN m.occurred_at>=? AND m.occurred_at<? AND m.movement_type='PURCHASE_RECEIPT' THEN m.quantity_delta ELSE 0 END),0) received_stock,
+  COALESCE(SUM(CASE WHEN m.occurred_at>=? AND m.occurred_at<? AND m.movement_type IN ('STOCKTAKE_LOSS','MANUAL_OUT','CORRECTION_OUT') THEN ABS(m.quantity_delta) ELSE 0 END),0) lost_stock,
+  COALESCE(SUM(CASE WHEN m.occurred_at>=? AND m.occurred_at<? AND m.movement_type IN ('STOCKTAKE_GAIN','MANUAL_IN','CORRECTION_IN') THEN m.quantity_delta ELSE 0 END),0) gained_stock,
+  COALESCE(SUM(CASE WHEN m.occurred_at<? THEN m.quantity_delta ELSE 0 END),0) closing_stock,
+  COALESCE(SUM(CASE WHEN m.occurred_at<? THEN m.quantity_delta*m.unit_cost ELSE 0 END),0) closing_value
+ FROM inventory_balances b
+ JOIN products p ON p.id=b.product_id AND p.business_id=b.business_id
+ JOIN business_locations l ON l.id=b.location_id AND l.business_id=b.business_id
+ LEFT JOIN inventory_movements m ON m.business_id=b.business_id AND m.location_id=b.location_id AND m.product_id=b.product_id
+ WHERE b.business_id=?
+ GROUP BY b.location_id,b.product_id,b.updated_at,p.name,p.sku,p.uom,l.name,l.code ORDER BY p.name,l.name";
+$stmt = mysqli_prepare($conn, $balanceQuery);
+mysqli_stmt_bind_param($stmt, 'sssssssssi', $stockPeriodStart,$stockPeriodStart,$stockPeriodEnd,$stockPeriodStart,$stockPeriodEnd,$stockPeriodStart,$stockPeriodEnd,$stockPeriodEnd,$stockPeriodEnd,$businessId);
+mysqli_stmt_execute($stmt); $balances = mysqli_stmt_get_result($stmt);
+?>
+<form class="stock-filter" method="GET"><input type="hidden" name="tab" value="balances"><?php if (getPreviewRole()): ?><input type="hidden" name="role" value="<?php echo e(getPreviewRole()); ?>"><?php endif; ?><label>From<input type="date" name="from" value="<?php echo e($stockFrom); ?>"></label><label>To<input type="date" name="to" value="<?php echo e($stockTo); ?>"></label><button class="btn-primary">Apply period</button></form>
+<section class="card"><div class="card-header"><div><div class="card-title">Stock Movement Summary</div><p class="section-help">Opening is the previous closing balance. Closing includes purchases, sales, returns, gains, losses, damage, expiry, and corrections.</p></div></div>
+<div class="inventory-table-scroll"><table class="data-table stock-summary"><thead><tr><th>SKU Code</th><th>Product Name</th><th>Location</th><th>Opening Stock</th><th>Received</th><th>Lost</th><th>Gain</th><th>Closing Stock</th><th>Average Purchase Price</th><th>Stock Value</th><th>Updated</th></tr></thead><tbody>
+<?php if (mysqli_num_rows($balances) === 0): ?><tr><td colspan="11" class="empty-cell">No inventory balances found.</td></tr><?php else: while ($row = mysqli_fetch_assoc($balances)): $historicalAverage = abs((float)$row['closing_stock']) > .00005 ? (float)$row['closing_value']/(float)$row['closing_stock'] : 0; ?>
+<tr><td><a class="code-badge history-link" href="?tab=product_history&product_id=<?php echo (int)$row['product_id']; ?>&location_id=<?php echo (int)$row['location_id']; ?>&from=<?php echo e($stockFrom); ?>&to=<?php echo e($stockTo); ?><?php echo $roleSuffix; ?>"><?php echo e($row['sku']); ?></a></td><td class="td-name"><a class="history-link" href="?tab=product_history&product_id=<?php echo (int)$row['product_id']; ?>&location_id=<?php echo (int)$row['location_id']; ?>&from=<?php echo e($stockFrom); ?>&to=<?php echo e($stockTo); ?><?php echo $roleSuffix; ?>"><?php echo e($row['product_name']); ?></a></td><td><?php echo e($row['location_code'].' · '.$row['location_name']); ?></td><td><?php echo number_format((float)$row['opening_stock'],4); ?> <?php echo e($row['uom']); ?></td><td class="stock-in">+<?php echo number_format((float)$row['received_stock'],4); ?></td><td class="stock-out">-<?php echo number_format((float)$row['lost_stock'],4); ?></td><td class="stock-in">+<?php echo number_format((float)$row['gained_stock'],4); ?></td><td class="td-bold"><?php echo number_format((float)$row['closing_stock'],4); ?> <?php echo e($row['uom']); ?></td><td><?php echo formatCurrency($historicalAverage,$currency); ?></td><td class="td-bold"><?php echo formatCurrency((float)$row['closing_value'],$currency); ?></td><td><?php echo formatDate($row['updated_at'],$config['timezone']); ?></td></tr>
+<?php endwhile; endif; ?></tbody></table></div></section>
+
+<?php elseif ($activeTab === 'movements'): ?>
+<?php
+$movementProduct = (int)($_GET['product_id'] ?? 0); $movementLocation = (int)($_GET['location_id'] ?? 0);
+$movementType = trim((string)($_GET['movement_type'] ?? '')); $movementUser = (int)($_GET['user_id'] ?? 0); $reference = trim((string)($_GET['reference'] ?? ''));
+$movementWhere = ' WHERE m.business_id=? AND m.occurred_at>=? AND m.occurred_at<?'; $movementParams=[$businessId,$stockPeriodStart,$stockPeriodEnd]; $movementTypes='iss';
+if ($movementProduct>0) {$movementWhere.=' AND m.product_id=?';$movementParams[]=$movementProduct;$movementTypes.='i';}
+if ($movementLocation>0) {$movementWhere.=' AND m.location_id=?';$movementParams[]=$movementLocation;$movementTypes.='i';}
+if ($movementType!=='') {$movementWhere.=' AND m.movement_type=?';$movementParams[]=$movementType;$movementTypes.='s';}
+if ($movementUser>0) {$movementWhere.=' AND m.created_by_membership_id=?';$movementParams[]=$movementUser;$movementTypes.='i';}
+$referenceExpr = "COALESCE(pu.purchase_number,pr.return_number,sa.sale_number,CONCAT(sr.return_number,' / ',srs.sale_number),ad.adjustment_number,st.stock_take_number,'—')";
+if ($reference!=='') {$movementWhere.=" AND $referenceExpr LIKE ?";$movementParams[]='%'.$reference.'%';$movementTypes.='s';}
+$countSql = "SELECT COUNT(*) total FROM inventory_movements m LEFT JOIN purchase_items pi ON pi.id=m.purchase_item_id LEFT JOIN purchases pu ON pu.id=pi.purchase_id LEFT JOIN purchase_return_items pri ON pri.id=m.purchase_return_item_id LEFT JOIN purchase_returns pr ON pr.id=pri.purchase_return_id LEFT JOIN sale_items si ON si.id=m.sale_item_id LEFT JOIN sales sa ON sa.id=si.sale_id LEFT JOIN sale_return_items sri ON sri.id=m.sale_return_item_id LEFT JOIN sale_returns sr ON sr.id=sri.sale_return_id LEFT JOIN sales srs ON srs.id=sr.sale_id LEFT JOIN stock_adjustment_items adi ON adi.id=m.stock_adjustment_item_id LEFT JOIN stock_adjustments ad ON ad.id=adi.stock_adjustment_id LEFT JOIN stock_take_items sti ON sti.id=m.stock_take_item_id LEFT JOIN stock_takes st ON st.id=sti.stock_take_id $movementWhere";
+$countStmt=mysqli_prepare($conn,$countSql);mysqli_stmt_bind_param($countStmt,$movementTypes,...$movementParams);mysqli_stmt_execute($countStmt);$totalRows=(int)mysqli_fetch_assoc(mysqli_stmt_get_result($countStmt))['total'];$totalPages=(int)ceil($totalRows/$limit);
+$movementSql="SELECT m.*,p.name product_name,p.sku,p.uom,l.name location_name,l.code location_code,pb.lot_number,CONCAT(u.first_name,' ',u.last_name) recorded_by,$referenceExpr reference_number FROM inventory_movements m JOIN products p ON p.id=m.product_id AND p.business_id=m.business_id JOIN business_locations l ON l.id=m.location_id AND l.business_id=m.business_id LEFT JOIN product_batches pb ON pb.id=m.batch_id LEFT JOIN business_memberships bm ON bm.id=m.created_by_membership_id LEFT JOIN users u ON u.id=bm.user_id LEFT JOIN purchase_items pi ON pi.id=m.purchase_item_id LEFT JOIN purchases pu ON pu.id=pi.purchase_id LEFT JOIN purchase_return_items pri ON pri.id=m.purchase_return_item_id LEFT JOIN purchase_returns pr ON pr.id=pri.purchase_return_id LEFT JOIN sale_items si ON si.id=m.sale_item_id LEFT JOIN sales sa ON sa.id=si.sale_id LEFT JOIN sale_return_items sri ON sri.id=m.sale_return_item_id LEFT JOIN sale_returns sr ON sr.id=sri.sale_return_id LEFT JOIN sales srs ON srs.id=sr.sale_id LEFT JOIN stock_adjustment_items adi ON adi.id=m.stock_adjustment_item_id LEFT JOIN stock_adjustments ad ON ad.id=adi.stock_adjustment_id LEFT JOIN stock_take_items sti ON sti.id=m.stock_take_item_id LEFT JOIN stock_takes st ON st.id=sti.stock_take_id $movementWhere ORDER BY m.occurred_at DESC,m.id DESC LIMIT ? OFFSET ?";
+$movementStmt=mysqli_prepare($conn,$movementSql);$queryTypes=$movementTypes.'ii';$queryParams=array_merge($movementParams,[$limit,$offset]);mysqli_stmt_bind_param($movementStmt,$queryTypes,...$queryParams);mysqli_stmt_execute($movementStmt);$movements=mysqli_stmt_get_result($movementStmt);
+$usersStmt=mysqli_prepare($conn,"SELECT bm.id,CONCAT(u.first_name,' ',u.last_name) name FROM business_memberships bm JOIN users u ON u.id=bm.user_id WHERE bm.business_id=? ORDER BY u.first_name,u.last_name");mysqli_stmt_bind_param($usersStmt,'i',$businessId);mysqli_stmt_execute($usersStmt);$users=mysqli_stmt_get_result($usersStmt);
+$movementQuery=['tab'=>'movements','from'=>$stockFrom,'to'=>$stockTo,'product_id'=>$movementProduct?:null,'location_id'=>$movementLocation?:null,'movement_type'=>$movementType?:null,'user_id'=>$movementUser?:null,'reference'=>$reference?:null,'role'=>getPreviewRole()];$movementQuery=array_filter($movementQuery,fn($v)=>$v!==null&&$v!=='');
+?>
+<form class="stock-filter movement-filter" method="GET"><input type="hidden" name="tab" value="movements"><?php if(getPreviewRole()):?><input type="hidden" name="role" value="<?php echo e(getPreviewRole()); ?>"><?php endif;?><label>From<input type="date" name="from" value="<?php echo e($stockFrom); ?>"></label><label>To<input type="date" name="to" value="<?php echo e($stockTo); ?>"></label><label>Product / SKU<select name="product_id"><option value="">All</option><?php foreach($products as $p):?><option value="<?php echo (int)$p['id']; ?>" <?php echo $movementProduct===(int)$p['id']?'selected':'';?>><?php echo e($p['name'].' ('.$p['sku'].')'); ?></option><?php endforeach;?></select></label><label>Location<select name="location_id"><option value="">All</option><?php foreach($locations as $l):?><option value="<?php echo (int)$l['id']; ?>" <?php echo $movementLocation===(int)$l['id']?'selected':'';?>><?php echo e($l['name']); ?></option><?php endforeach;?></select></label><label>Movement<select name="movement_type"><option value="">All</option><?php foreach(['PURCHASE_RECEIPT','PURCHASE_RETURN','SALE','SALE_RETURN','MANUAL_IN','MANUAL_OUT','STOCKTAKE_GAIN','STOCKTAKE_LOSS','DAMAGE','EXPIRY','OPENING','CORRECTION_IN','CORRECTION_OUT'] as $type):?><option <?php echo $movementType===$type?'selected':'';?>><?php echo $type;?></option><?php endforeach;?></select></label><label>User<select name="user_id"><option value="">All</option><?php while($u=mysqli_fetch_assoc($users)):?><option value="<?php echo (int)$u['id'];?>" <?php echo $movementUser===(int)$u['id']?'selected':'';?>><?php echo e($u['name']);?></option><?php endwhile;?></select></label><label>Reference<input name="reference" value="<?php echo e($reference);?>" placeholder="Transaction number"></label><button class="btn-primary">Apply</button><a class="btn-sm" href="?tab=movements<?php echo $roleSuffix; ?>">Clear</a></form>
+<section class="card"><div class="card-header"><div><div class="card-title">Stock Movements History</div><p class="section-help">Every physical change from the authoritative inventory ledger.</p></div></div><div class="inventory-table-scroll"><table class="data-table movement-table"><thead><tr><th>Date / Time</th><th>SKU / Product</th><th>Location</th><th>Movement</th><th>Quantity In</th><th>Quantity Out</th><th>Unit Cost</th><th>Transaction Value</th><th>Reference</th><th>Batch</th><th>Recorded By</th><th>Notes</th></tr></thead><tbody>
+<?php if(mysqli_num_rows($movements)===0):?><tr><td colspan="12" class="empty-cell">No matching stock movements.</td></tr><?php else:while($row=mysqli_fetch_assoc($movements)): $delta=(float)$row['quantity_delta'];?><tr><td><?php echo formatDate($row['occurred_at']);?></td><td><a class="history-link" href="?tab=product_history&product_id=<?php echo (int)$row['product_id'];?>&from=<?php echo e($stockFrom);?>&to=<?php echo e($stockTo);?><?php echo $roleSuffix;?>"><strong><?php echo e($row['product_name']);?></strong><small><?php echo e($row['sku']);?></small></a></td><td><?php echo e($row['location_code']);?></td><td><span class="code-badge"><?php echo e($row['movement_type']);?></span></td><td class="stock-in"><?php echo $delta>0?number_format($delta,4):'—';?></td><td class="stock-out"><?php echo $delta<0?number_format(abs($delta),4):'—';?></td><td><?php echo formatCurrency($row['unit_cost'],$currency);?></td><td><?php echo formatCurrency(abs($delta)*(float)$row['unit_cost'],$currency);?></td><td><?php echo e($row['reference_number']);?></td><td><?php echo e($row['lot_number']??'—');?></td><td><?php echo e(trim($row['recorded_by'])?:'System / Import');?></td><td><?php echo e($row['notes']??'—');?></td></tr><?php endwhile;endif;?></tbody></table></div>
+<?php if($totalPages>1):?><div class="pager"><span>Page <?php echo $page;?> of <?php echo $totalPages;?> · <?php echo $totalRows;?> records</span><div><?php if($page>1):?><a class="btn-sm" href="?<?php echo e(http_build_query(array_merge($movementQuery,['page'=>$page-1])));?>">Previous</a><?php endif;?><?php if($page<$totalPages):?><a class="btn-sm" href="?<?php echo e(http_build_query(array_merge($movementQuery,['page'=>$page+1])));?>">Next</a><?php endif;?></div></div><?php endif;?></section>
+
+<?php elseif ($activeTab === 'product_history'): ?>
+<?php
+$productId=(int)($_GET['product_id']??0);$historyLocation=(int)($_GET['location_id']??0);
+$selectedProduct=null;foreach($products as $p){if((int)$p['id']===$productId){$selectedProduct=$p;break;}}
+if(!$selectedProduct):?><section class="card"><div class="empty-cell">Select a valid product from Stock Balances or Movement History.</div></section><?php else:
+$historyWhere='m.business_id=? AND m.product_id=? AND m.occurred_at>=? AND m.occurred_at<?';$historyParams=[$businessId,$productId,$stockPeriodStart,$stockPeriodEnd];$historyTypes='iiss';
+$openingWhere='business_id=? AND product_id=? AND occurred_at<?';$openingParams=[$businessId,$productId,$stockPeriodStart];$openingTypes='iis';
+if($historyLocation>0){$historyWhere.=' AND m.location_id=?';$historyParams[]=$historyLocation;$historyTypes.='i';$openingWhere.=' AND location_id=?';$openingParams[]=$historyLocation;$openingTypes.='i';}
+$openingStmt=mysqli_prepare($conn,"SELECT COALESCE(SUM(quantity_delta),0) opening,COALESCE(SUM(quantity_delta*unit_cost),0) opening_value FROM inventory_movements WHERE $openingWhere");mysqli_stmt_bind_param($openingStmt,$openingTypes,...$openingParams);mysqli_stmt_execute($openingStmt);$openingRow=mysqli_fetch_assoc(mysqli_stmt_get_result($openingStmt));$running=(float)$openingRow['opening'];$runningValue=(float)$openingRow['opening_value'];$dayOpening=$running;
+$historySql="SELECT m.*,l.name location_name,l.code location_code,pb.lot_number,CONCAT(u.first_name,' ',u.last_name) performed_by,pu.purchase_number,sup.name supplier_name,sa.sale_number,c.name customer_name,si.unit_price,pi.ordered_quantity,pi.received_quantity,sr.return_number sale_return_number,pr.return_number purchase_return_number,ad.adjustment_number,st.stock_take_number FROM inventory_movements m JOIN business_locations l ON l.id=m.location_id AND l.business_id=m.business_id LEFT JOIN product_batches pb ON pb.id=m.batch_id LEFT JOIN business_memberships bm ON bm.id=m.created_by_membership_id LEFT JOIN users u ON u.id=bm.user_id LEFT JOIN purchase_items pi ON pi.id=m.purchase_item_id LEFT JOIN purchases pu ON pu.id=pi.purchase_id LEFT JOIN suppliers sup ON sup.id=pu.supplier_id LEFT JOIN sale_items si ON si.id=m.sale_item_id LEFT JOIN sales sa ON sa.id=si.sale_id LEFT JOIN customers c ON c.id=sa.customer_id LEFT JOIN sale_return_items sri ON sri.id=m.sale_return_item_id LEFT JOIN sale_returns sr ON sr.id=sri.sale_return_id LEFT JOIN purchase_return_items pri ON pri.id=m.purchase_return_item_id LEFT JOIN purchase_returns pr ON pr.id=pri.purchase_return_id LEFT JOIN stock_adjustment_items adi ON adi.id=m.stock_adjustment_item_id LEFT JOIN stock_adjustments ad ON ad.id=adi.stock_adjustment_id LEFT JOIN stock_take_items sti ON sti.id=m.stock_take_item_id LEFT JOIN stock_takes st ON st.id=sti.stock_take_id WHERE $historyWhere ORDER BY m.occurred_at,m.id";
+$historyStmt=mysqli_prepare($conn,$historySql);mysqli_stmt_bind_param($historyStmt,$historyTypes,...$historyParams);mysqli_stmt_execute($historyStmt);$history=mysqli_stmt_get_result($historyStmt);
+?>
+<div class="page-mode"><div><strong>Product History · <?php echo e($selectedProduct['name']);?></strong><span><?php echo e($selectedProduct['sku']);?> · chronological ledger and running balance</span></div><a class="btn-sm" href="?tab=balances<?php echo $roleSuffix;?>">Back to balances</a></div>
+<form class="stock-filter" method="GET"><input type="hidden" name="tab" value="product_history"><input type="hidden" name="product_id" value="<?php echo $productId;?>"><?php if(getPreviewRole()):?><input type="hidden" name="role" value="<?php echo e(getPreviewRole());?>"><?php endif;?><label>From<input type="date" name="from" value="<?php echo e($stockFrom);?>"></label><label>To<input type="date" name="to" value="<?php echo e($stockTo);?>"></label><label>Location<select name="location_id"><option value="">All locations</option><?php foreach($locations as $l):?><option value="<?php echo (int)$l['id'];?>" <?php echo $historyLocation===(int)$l['id']?'selected':'';?>><?php echo e($l['name']);?></option><?php endforeach;?></select></label><button class="btn-primary">Apply</button></form>
+<div class="history-summary"><span>Opening <strong><?php echo number_format($dayOpening,4);?> <?php echo e($selectedProduct['uom']);?></strong></span><span>Period <?php echo e($stockFrom);?> → <?php echo e($stockTo);?></span></div>
+<section class="card"><div class="inventory-table-scroll"><table class="data-table product-history-table"><thead><tr><th>Date / Time</th><th>Transaction</th><th>Reference</th><th>Location</th><th>Opening</th><th>Purchase / Received</th><th>Purchase Return</th><th>Sale</th><th>Sale Return</th><th>Stock In</th><th>Stock Out</th><th>Gain</th><th>Lost</th><th>Damage</th><th>Expiry</th><th>Correction</th><th>Qty In</th><th>Qty Out</th><th>Closing / Running</th><th>Purchase Cost</th><th>Average Cost</th><th>Selling Price</th><th>Stock Value</th><th>Customer / Supplier</th><th>Batch</th><th>Performed By</th><th>Notes</th></tr></thead><tbody>
+<?php if(mysqli_num_rows($history)===0):?><tr><td colspan="27" class="empty-cell">No movements occurred in this exact period.</td></tr><?php else:while($row=mysqli_fetch_assoc($history)):$before=$running;$delta=(float)$row['quantity_delta'];$absolute=abs($delta);$type=$row['movement_type'];$running+=$delta;$runningValue+=$delta*(float)$row['unit_cost'];$runningAverage=abs($running)>.00005?$runningValue/$running:0;$ref=$row['purchase_number']??$row['purchase_return_number']??$row['sale_number']??$row['sale_return_number']??$row['adjustment_number']??$row['stock_take_number']??'—';?><tr><td><?php echo formatDate($row['occurred_at'],$config['timezone']);?></td><td><span class="code-badge"><?php echo e($type);?></span></td><td><?php echo e($ref);?></td><td><?php echo e($row['location_code']);?></td><td><?php echo number_format($before,4);?></td><td class="stock-in"><?php echo $type==='PURCHASE_RECEIPT'?number_format($absolute,4):'—';?></td><td class="stock-out"><?php echo $type==='PURCHASE_RETURN'?number_format($absolute,4):'—';?></td><td class="stock-out"><?php echo $type==='SALE'?number_format($absolute,4):'—';?></td><td class="stock-in"><?php echo $type==='SALE_RETURN'?number_format($absolute,4):'—';?></td><td class="stock-in"><?php echo $type==='MANUAL_IN'?number_format($absolute,4):'—';?></td><td class="stock-out"><?php echo $type==='MANUAL_OUT'?number_format($absolute,4):'—';?></td><td class="stock-in"><?php echo $type==='STOCKTAKE_GAIN'?number_format($absolute,4):'—';?></td><td class="stock-out"><?php echo $type==='STOCKTAKE_LOSS'?number_format($absolute,4):'—';?></td><td class="stock-out"><?php echo $type==='DAMAGE'?number_format($absolute,4):'—';?></td><td class="stock-out"><?php echo $type==='EXPIRY'?number_format($absolute,4):'—';?></td><td><?php echo in_array($type,['CORRECTION_IN','CORRECTION_OUT'],true)?($delta>0?'+':'-').number_format($absolute,4):'—';?></td><td class="stock-in"><?php echo $delta>0?number_format($delta,4):'—';?></td><td class="stock-out"><?php echo $delta<0?number_format($absolute,4):'—';?></td><td class="td-bold"><?php echo number_format($running,4);?></td><td><?php echo in_array($type,['PURCHASE_RECEIPT','PURCHASE_RETURN'],true)?formatCurrency($row['unit_cost'],$currency):'—';?></td><td><?php echo formatCurrency($runningAverage,$currency);?></td><td><?php echo $row['unit_price']!==null?formatCurrency($row['unit_price'],$currency):'—';?></td><td><?php echo formatCurrency($runningValue,$currency);?></td><td><?php echo e($row['customer_name']??$row['supplier_name']??'Walk-In / Internal');?></td><td><?php echo e($row['lot_number']??'—');?></td><td><?php echo e(trim($row['performed_by'])?:'System / Import');?></td><td><?php echo e($row['notes']??'—');?></td></tr><?php endwhile;endif;?></tbody></table></div></section><div class="history-summary"><span>Closing <strong><?php echo number_format($running,4);?> <?php echo e($selectedProduct['uom']);?></strong></span><span>Value <strong><?php echo formatCurrency($runningValue,$currency);?></strong></span></div>
+<?php endif; ?>
+
+<?php elseif ($activeTab === 'adjust'): ?>
+<?php
+$adjustmentStmt=mysqli_prepare($conn,"SELECT sa.*,COUNT(sai.id) item_count FROM stock_adjustments sa LEFT JOIN stock_adjustment_items sai ON sai.stock_adjustment_id=sa.id AND sai.business_id=sa.business_id WHERE sa.business_id=? GROUP BY sa.id ORDER BY sa.created_at DESC LIMIT 50");mysqli_stmt_bind_param($adjustmentStmt,'i',$businessId);mysqli_stmt_execute($adjustmentStmt);$adjustments=mysqli_stmt_get_result($adjustmentStmt);
+$takeStmt=mysqli_prepare($conn,"SELECT st.*,COUNT(sti.id) item_count FROM stock_takes st LEFT JOIN stock_take_items sti ON sti.stock_take_id=st.id AND sti.business_id=st.business_id WHERE st.business_id=? GROUP BY st.id ORDER BY st.created_at DESC LIMIT 50");mysqli_stmt_bind_param($takeStmt,'i',$businessId);mysqli_stmt_execute($takeStmt);$stockTakes=mysqli_stmt_get_result($takeStmt);
+$reconStmt=mysqli_prepare($conn,"SELECT k.location_id,k.product_id,l.code,p.sku,COALESCE(b.quantity_on_hand,0) quantity_on_hand,COALESCE(SUM(m.quantity_delta),0) ledger_quantity,COALESCE(b.quantity_on_hand,0)-COALESCE(SUM(m.quantity_delta),0) difference FROM (SELECT business_id,location_id,product_id FROM inventory_balances WHERE business_id=? UNION SELECT business_id,location_id,product_id FROM inventory_movements WHERE business_id=?) k JOIN products p ON p.id=k.product_id AND p.business_id=k.business_id JOIN business_locations l ON l.id=k.location_id AND l.business_id=k.business_id LEFT JOIN inventory_balances b ON b.business_id=k.business_id AND b.location_id=k.location_id AND b.product_id=k.product_id LEFT JOIN inventory_movements m ON m.business_id=k.business_id AND m.location_id=k.location_id AND m.product_id=k.product_id GROUP BY k.location_id,k.product_id,l.code,p.sku,b.quantity_on_hand HAVING ABS(difference)>.00005");mysqli_stmt_bind_param($reconStmt,'ii',$businessId,$businessId);mysqli_stmt_execute($reconStmt);$reconciliation=mysqli_stmt_get_result($reconStmt);
+?>
+<div class="management-grid">
+<?php if($canAdjust):?><section class="card management-form"><div class="card-header"><div><div class="card-title">Create Stock Adjustment</div><p class="section-help">Saved as Draft; stock changes only after approval.</p></div></div><form action="backend.php<?php echo $roleQuery;?>" method="POST" class="form-stack submit-lock"><input type="hidden" name="csrf_token" value="<?php echo e($csrfToken);?>"><input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken());?>"><input type="hidden" name="action" value="create_adjustment"><label>Adjustment Number<input name="adjustment_number" value="ADJ-<?php echo e($localNow->format('YmdHis'));?>"></label><label>Occurred At<input type="datetime-local" name="occurred_at" value="<?php echo e($localNow->format('Y-m-d\TH:i'));?>" required></label><label>Product<select name="product_id" class="tracked-product" required><option value="">Choose product</option><?php foreach($products as $p):?><option value="<?php echo (int)$p['id'];?>" data-cost="<?php echo e($p['cost_price']);?>" data-batches="<?php echo (int)$p['track_batches'];?>"><?php echo e($p['name'].' ('.$p['sku'].')');?></option><?php endforeach;?></select></label><label>Location<select name="location_id" class="tracked-location" required><option value="">Choose location</option><?php foreach($locations as $l):?><option value="<?php echo (int)$l['id'];?>"><?php echo e($l['name']);?></option><?php endforeach;?></select></label><label>Batch / Lot<select name="batch_id" class="tracked-batch"><option value="">Not required</option></select></label><label>Adjustment Type<select name="adjustment_type" required><?php foreach(['STOCK_IN'=>'Stock In','STOCK_OUT'=>'Stock Out','GAIN'=>'Gain','LOSS'=>'Loss','DAMAGED'=>'Damaged','EXPIRED'=>'Expired','OPENING'=>'Opening (initial setup only)','CORRECTION_IN'=>'Correction In','CORRECTION_OUT'=>'Correction Out'] as $value=>$label):?><option value="<?php echo $value;?>"><?php echo e($label);?></option><?php endforeach;?></select></label><label>Quantity<input type="number" name="quantity" min=".0001" step=".0001" required></label><label>Unit Cost<input class="default-cost" type="number" name="unit_cost" min="0" step=".0001" required></label><label>Reason<textarea name="reason" rows="3" required></textarea></label><button class="btn-primary">Save Draft Adjustment</button></form></section><?php endif;?>
+<?php if($canStockTake):?><section class="card management-form"><div class="card-header"><div><div class="card-title">Create Stock Take</div><p class="section-help">Capture a count without altering stock. An approver completes it.</p></div></div><form action="backend.php<?php echo $roleQuery;?>" method="POST" class="form-stack submit-lock"><input type="hidden" name="csrf_token" value="<?php echo e($csrfToken);?>"><input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken());?>"><input type="hidden" name="action" value="create_stock_take"><label>Stock Take Number<input name="stock_take_number" value="ST-<?php echo e($localNow->format('YmdHis'));?>"></label><label>Location<select name="location_id" class="tracked-location" required><option value="">Choose location</option><?php foreach($locations as $l):?><option value="<?php echo (int)$l['id'];?>"><?php echo e($l['name']);?></option><?php endforeach;?></select></label><label>Product<select name="product_ids[]" class="tracked-product" required><option value="">Choose product</option><?php foreach($products as $p):?><option value="<?php echo (int)$p['id'];?>" data-batches="<?php echo (int)$p['track_batches'];?>"><?php echo e($p['name'].' ('.$p['sku'].')');?></option><?php endforeach;?></select></label><label>Batch / Lot<select name="batch_ids[]" class="tracked-batch"><option value="">Not required</option></select></label><label>Counted Quantity<input type="number" name="counted_quantities[]" min="0" step=".0001" required></label><label>Notes<textarea name="notes" rows="3"></textarea></label><button class="btn-primary">Save Draft Stock Take</button></form></section><?php endif;?>
+</div>
+<section class="card"><div class="card-header"><div class="card-title">Adjustment Approval Queue</div></div><div class="inventory-table-scroll"><table class="data-table"><thead><tr><th>Number</th><th>Occurred</th><th>Type</th><th>Items</th><th>Status</th><th>Action</th></tr></thead><tbody><?php if(mysqli_num_rows($adjustments)===0):?><tr><td colspan="6" class="empty-cell">No stock adjustments.</td></tr><?php else:while($a=mysqli_fetch_assoc($adjustments)):?><tr><td><?php echo e($a['adjustment_number']);?></td><td><?php echo formatDate($a['occurred_at']);?></td><td><?php echo e($a['adjustment_type']);?></td><td><?php echo (int)$a['item_count'];?></td><td><span class="status-pill"><?php echo e($a['status']);?></span></td><td><?php if($canApprove&&$a['status']==='DRAFT'):?><form action="backend.php<?php echo $roleQuery;?>" method="POST" class="inline-form"><input type="hidden" name="csrf_token" value="<?php echo e($csrfToken);?>"><input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken());?>"><input type="hidden" name="action" value="post_adjustment"><input type="hidden" name="adjustment_id" value="<?php echo (int)$a['id'];?>"><button class="btn-sm">Post</button></form><?php elseif($canApprove&&$a['status']==='POSTED'):?><form action="backend.php<?php echo $roleQuery;?>" method="POST" class="inline-form" onsubmit="return confirm('Create controlled reversal movements and void this adjustment?')"><input type="hidden" name="csrf_token" value="<?php echo e($csrfToken);?>"><input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken());?>"><input type="hidden" name="action" value="void_adjustment"><input type="hidden" name="adjustment_id" value="<?php echo (int)$a['id'];?>"><button class="btn-sm">Void</button></form><?php else:?>—<?php endif;?></td></tr><?php endwhile;endif;?></tbody></table></div></section>
+<section class="card"><div class="card-header"><div class="card-title">Stock Take Approval Queue</div></div><div class="inventory-table-scroll"><table class="data-table"><thead><tr><th>Number</th><th>Started</th><th>Items</th><th>Status</th><th>Action</th></tr></thead><tbody><?php if(mysqli_num_rows($stockTakes)===0):?><tr><td colspan="5" class="empty-cell">No stock takes.</td></tr><?php else:while($t=mysqli_fetch_assoc($stockTakes)):?><tr><td><?php echo e($t['stock_take_number']);?></td><td><?php echo formatDate($t['started_at']);?></td><td><?php echo (int)$t['item_count'];?></td><td><?php echo e($t['status']);?></td><td><?php if($canApprove&&$t['status']==='DRAFT'):?><form action="backend.php<?php echo $roleQuery;?>" method="POST" class="inline-form"><input type="hidden" name="csrf_token" value="<?php echo e($csrfToken);?>"><input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken());?>"><input type="hidden" name="action" value="complete_stock_take"><input type="hidden" name="stock_take_id" value="<?php echo (int)$t['id'];?>"><button class="btn-sm">Complete</button></form><?php else:?>—<?php endif;?></td></tr><?php endwhile;endif;?></tbody></table></div></section>
+<section class="card"><div class="card-header"><div><div class="card-title">Inventory Reconciliation Diagnostic</div><p class="section-help">Compares current balances with the movement ledger. Differences are reported and never overwritten.</p></div></div><div class="inventory-table-scroll"><table class="data-table"><thead><tr><th>Location</th><th>SKU</th><th>Balance</th><th>Ledger</th><th>Difference</th></tr></thead><tbody><?php if(mysqli_num_rows($reconciliation)===0):?><tr><td colspan="5" class="empty-cell">All current inventory balances reconcile with the ledger.</td></tr><?php else:while($r=mysqli_fetch_assoc($reconciliation)):?><tr><td><?php echo e($r['code']);?></td><td><?php echo e($r['sku']);?></td><td><?php echo number_format($r['quantity_on_hand'],4);?></td><td><?php echo number_format($r['ledger_quantity'],4);?></td><td class="stock-out"><?php echo number_format($r['difference'],4);?></td></tr><?php endwhile;endif;?></tbody></table></div></section>
+<script>
+const inventoryBatches=<?php echo json_encode($batches,JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT);?>;
+document.querySelectorAll('.management-form form').forEach(form=>{const product=form.querySelector('.tracked-product'),location=form.querySelector('.tracked-location'),batch=form.querySelector('.tracked-batch'),cost=form.querySelector('.default-cost');const refresh=()=>{if(cost&&product.selectedOptions[0]?.dataset.cost)cost.value=parseFloat(product.selectedOptions[0].dataset.cost).toFixed(4);const productId=parseInt(product.value||'0'),locationId=parseInt(location.value||'0'),tracked=parseInt(product.selectedOptions[0]?.dataset.batches||'0')===1;batch.innerHTML='<option value="">'+(tracked?'Choose batch':'Not required')+'</option>';inventoryBatches.filter(b=>parseInt(b.product_id)===productId&&(!locationId||parseInt(b.location_id||'0')===locationId)).forEach(b=>batch.insertAdjacentHTML('beforeend',`<option value="${b.id}">${b.lot_number}${b.expires_at?' · exp '+b.expires_at:''}${b.available_quantity!==null?' · '+parseFloat(b.available_quantity).toFixed(4):''}</option>`));batch.required=tracked;};product?.addEventListener('change',refresh);location?.addEventListener('change',refresh);});
+document.querySelectorAll('.submit-lock').forEach(form=>form.addEventListener('submit',()=>{const button=form.querySelector('button[type=submit],button:not([type])');if(button){button.disabled=true;button.textContent='Saving…';}}));
+</script>
+<?php endif; ?>
+
+<style>
+.business-context-notice{display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:11px 14px;background:var(--card);border-radius:var(--radius);color:var(--text2);font-size:10.5px}.business-context-notice strong{color:var(--text);white-space:nowrap}.inventory-tabs{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:8px;border-bottom:1px solid var(--border)}.inventory-tabs a,.history-link{text-decoration:none;color:inherit}.stock-filter{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;border-radius:var(--radius-lg);background:var(--card)}.stock-filter label,.form-stack label{display:flex;flex-direction:column;gap:5px;font-size:10px;font-weight:600;color:var(--text2)}.stock-filter input,.stock-filter select,.form-stack input,.form-stack select,.form-stack textarea{min-height:35px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text)}.movement-filter{max-height:230px;overflow:auto}.section-help{margin:5px 0 0;color:var(--text3);font-size:10px}.inventory-table-scroll{max-height:64vh;overflow:auto}.inventory-table-scroll table{min-width:900px}.stock-summary{min-width:1180px!important}.movement-table{min-width:1450px!important}.product-history-table{min-width:1900px!important}.inventory-table-scroll thead{position:sticky;top:0;z-index:2;background:var(--card)}.stock-in{color:var(--green);font-weight:650}.stock-out{color:var(--red);font-weight:650}.empty-cell{text-align:center;color:var(--text3);padding:28px!important}.movement-table small,.history-link small{display:block;color:var(--text3);font-size:9px}.pager,.page-mode,.history-summary{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px}.pager{border-top:1px solid var(--border);font-size:11px;color:var(--text3)}.pager div{display:flex;gap:6px}.page-mode,.history-summary{background:var(--card);border-radius:var(--radius);margin-bottom:14px}.page-mode strong,.page-mode span{display:block}.page-mode span{font-size:10px;color:var(--text3);margin-top:3px}.management-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}.management-form{min-width:0}.form-stack{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;padding:16px}.form-stack label:has(textarea),.form-stack button{grid-column:1/-1}.inline-form{display:inline}.card+.card{margin-top:14px}@media(max-width:800px){.management-grid,.form-stack{grid-template-columns:1fr}.stock-filter{align-items:stretch}.stock-filter label{min-width:calc(50% - 8px)}.business-context-notice{align-items:flex-start;flex-direction:column}}
+.product-history-table{min-width:2800px!important}
+</style>
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

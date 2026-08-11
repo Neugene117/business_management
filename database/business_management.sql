@@ -1209,7 +1209,7 @@ CREATE TABLE `report_deliveries` (
   `id` bigint(20) UNSIGNED NOT NULL,
   `business_id` bigint(20) UNSIGNED NOT NULL,
   `generated_report_id` bigint(20) UNSIGNED NOT NULL,
-  `channel` enum('EMAIL','SMS','IN_APP') NOT NULL,
+  `channel` enum('EMAIL') NOT NULL,
   `destination` varchar(254) NOT NULL,
   `status` enum('PENDING','SENT','FAILED') NOT NULL DEFAULT 'PENDING',
   `provider_message_id` varchar(255) DEFAULT NULL,
@@ -1217,6 +1217,29 @@ CREATE TABLE `report_deliveries` (
   `sent_at` datetime(6) DEFAULT NULL,
   `error_message` varchar(1000) DEFAULT NULL,
   `created_at` datetime(6) NOT NULL DEFAULT current_timestamp(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `report_delivery_settings`
+--
+
+CREATE TABLE `report_delivery_settings` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `business_id` bigint(20) UNSIGNED NOT NULL,
+  `smtp_host` varchar(255) NOT NULL,
+  `smtp_port` smallint(5) UNSIGNED NOT NULL DEFAULT 587,
+  `smtp_encryption` enum('TLS','SMTPS','NONE') NOT NULL DEFAULT 'TLS',
+  `smtp_username_encrypted` text DEFAULT NULL,
+  `smtp_password_encrypted` text DEFAULT NULL,
+  `from_email` varchar(254) NOT NULL,
+  `from_name` varchar(200) DEFAULT NULL,
+  `reply_to_email` varchar(254) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 0,
+  `configured_by_membership_id` bigint(20) UNSIGNED NOT NULL,
+  `created_at` datetime(6) NOT NULL DEFAULT current_timestamp(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT current_timestamp(6) ON UPDATE current_timestamp(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
@@ -1271,7 +1294,7 @@ CREATE TABLE `report_schedule_recipients` (
   `id` bigint(20) UNSIGNED NOT NULL,
   `business_id` bigint(20) UNSIGNED NOT NULL,
   `report_schedule_id` bigint(20) UNSIGNED NOT NULL,
-  `channel` enum('EMAIL','SMS','IN_APP') NOT NULL,
+  `channel` enum('EMAIL') NOT NULL,
   `destination` varchar(254) NOT NULL,
   `created_at` datetime(6) NOT NULL DEFAULT current_timestamp(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -1281,7 +1304,7 @@ CREATE TABLE `report_schedule_recipients` (
 --
 
 INSERT INTO `report_schedule_recipients` (`id`, `business_id`, `report_schedule_id`, `channel`, `destination`, `created_at`) VALUES
-(1, 1, 1, 'IN_APP', 'owner:@business-owner', '2026-08-08 13:06:13.523839'),
+(1, 1, 1, 'EMAIL', 'owner@kigaliretail.demo', '2026-08-08 13:06:13.523839'),
 (2, 1, 2, 'EMAIL', 'owner@kigaliretail.demo', '2026-08-08 13:06:13.523839'),
 (3, 1, 3, 'EMAIL', 'owner@kigaliretail.demo', '2026-08-08 13:06:13.523839'),
 (4, 1, 4, 'EMAIL', 'owner@kigaliretail.demo', '2026-08-08 13:06:13.523839');
@@ -2092,6 +2115,14 @@ ALTER TABLE `report_deliveries`
   ADD KEY `fk_report_delivery_report` (`business_id`,`generated_report_id`);
 
 --
+-- Indexes for table `report_delivery_settings`
+--
+ALTER TABLE `report_delivery_settings`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_report_delivery_setting` (`business_id`),
+  ADD KEY `fk_report_delivery_setting_creator` (`business_id`,`configured_by_membership_id`);
+
+--
 -- Indexes for table `report_schedules`
 --
 ALTER TABLE `report_schedules`
@@ -2418,6 +2449,12 @@ ALTER TABLE `purchase_return_items`
 --
 ALTER TABLE `report_deliveries`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+
+--
+-- AUTO_INCREMENT for table `report_delivery_settings`
+--
+ALTER TABLE `report_delivery_settings`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `report_schedules`
@@ -2784,6 +2821,13 @@ ALTER TABLE `purchase_return_items`
 --
 ALTER TABLE `report_deliveries`
   ADD CONSTRAINT `fk_report_delivery_report` FOREIGN KEY (`business_id`,`generated_report_id`) REFERENCES `generated_reports` (`business_id`, `id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `report_delivery_settings`
+--
+ALTER TABLE `report_delivery_settings`
+  ADD CONSTRAINT `fk_report_delivery_setting_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_report_delivery_setting_creator` FOREIGN KEY (`business_id`,`configured_by_membership_id`) REFERENCES `business_memberships` (`business_id`,`id`);
 
 --
 -- Constraints for table `report_schedules`

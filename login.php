@@ -186,9 +186,6 @@ $csrfToken = generateCsrfToken();
     <div class="form-card">
 
       <div class="brand">
-        <div class="logo-badge">
-          <span style="color: #fff; font-weight: 700; font-size: 14px; letter-spacing: 0.5px;">Logo</span>
-        </div>
         <div>
           <div class="brand-text">Business Management</div>
           <div class="brand-sub">Financial Suite</div>

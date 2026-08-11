@@ -109,15 +109,6 @@ $canViewLeave = hasPermission($conn, $sidebarMembershipId, $sidebarBusinessId, '
         </a>
         <?php endif; ?>
         <?php if ($canViewReports): ?>
-        <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Profit & Loss'); ?>" href="<?php echo $root_prefix; ?>pages/report/index.php<?php echo $role_query; ?>#pnl-overview" id="nav-totals">
-          <div class="app-grid-icon-wrap" style="background: var(--green-bg);">
-            <svg viewBox="0 0 24 24" style="stroke: var(--green);"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-          </div>
-          <div class="app-grid-info">
-            <div class="app-grid-name">Profit &amp; Loss</div>
-            <div class="app-grid-desc">Net profit margin check</div>
-          </div>
-        </a>
         <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Reports'); ?>" href="<?php echo $root_prefix; ?>pages/report/index.php<?php echo $role_query; ?>" id="nav-reports">
           <div class="app-grid-icon-wrap" style="background: var(--amber-bg);">
             <svg viewBox="0 0 24 24" style="stroke: var(--amber);"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>

@@ -5,7 +5,8 @@ require_once __DIR__ . '/../../includes/header.php';
 $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
-$businessId = $_SESSION['active_business_id'] ?? 0;
+$businessId = (int)($_SESSION['active_business_id'] ?? 0);
+$hasBusinessContext = $businessId > 0;
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
 
@@ -85,7 +86,7 @@ while ($lRow = mysqli_fetch_assoc($lResult)) {
 }
 
 // Fetch active products
-$prodQuery = "SELECT id, name, sku, cost_price FROM products WHERE business_id = ? AND is_active = 1 ORDER BY name ASC";
+$prodQuery = "SELECT id,name,sku,uom,cost_price,track_batches,track_expiry FROM products WHERE business_id=? AND is_active=1 ORDER BY name";
 $pStmt = mysqli_prepare($conn, $prodQuery);
 mysqli_stmt_bind_param($pStmt, 'i', $businessId);
 mysqli_stmt_execute($pStmt);
@@ -101,14 +102,35 @@ $bStmt = mysqli_prepare($conn, $bizQuery);
 mysqli_stmt_bind_param($bStmt, 'i', $businessId);
 mysqli_stmt_execute($bStmt);
 $bizCur = mysqli_fetch_assoc(mysqli_stmt_get_result($bStmt))['currency_code'] ?? 'RWF';
+$purchaseConfig = [
+    'timezone' => 'Africa/Kigali',
+    'inventory_valuation_method' => 'WEIGHTED_AVERAGE',
+    'default_tax_rate' => 0.0,
+    'allow_negative_stock' => 0
+];
+if ($hasBusinessContext) {
+    try {
+        $purchaseConfig = getBusinessInventoryConfig($conn, $businessId);
+    } catch (RuntimeException $error) {
+        if (!isSuperAdmin()) {
+            throw $error;
+        }
+        $hasBusinessContext = false;
+        $businessId = 0;
+    }
+}
+$purchaseLocalNow = new DateTimeImmutable('now', new DateTimeZone($purchaseConfig['timezone']));
 
 $csrfToken = generateCsrfToken();
 $role_query = getRolePreviewQuery();
-$canCreatePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['create']);
-$canUpdatePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
-$canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['receive']);
+$canCreatePurchase = $hasBusinessContext && hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['create']);
+$canUpdatePurchase = $hasBusinessContext && hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
+$canReceivePurchase = $hasBusinessContext && hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['receive']);
 ?>
 <div>
+  <?php if (!$hasBusinessContext): ?>
+    <div class="business-context-notice" role="status"><strong>Purchases preview</strong><span>No active business is attached to this platform session, so purchase data and transaction actions are unavailable.</span></div>
+  <?php endif; ?>
   <!-- Left Column: Table List -->
   <div class="card">
     <div class="card-header" style="flex-wrap: wrap; gap: 12px; display: flex; justify-content: space-between; align-items: center;">
@@ -126,6 +148,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
           <option value="">All Statuses</option>
           <option value="DRAFT" <?php echo ($status_filter === 'DRAFT') ? 'selected' : ''; ?>>Draft</option>
           <option value="ORDERED" <?php echo ($status_filter === 'ORDERED') ? 'selected' : ''; ?>>Ordered</option>
+          <option value="PARTIALLY_RECEIVED" <?php echo ($status_filter === 'PARTIALLY_RECEIVED') ? 'selected' : ''; ?>>Partially Received</option>
           <option value="RECEIVED" <?php echo ($status_filter === 'RECEIVED') ? 'selected' : ''; ?>>Received</option>
           <option value="CANCELLED" <?php echo ($status_filter === 'CANCELLED') ? 'selected' : ''; ?>>Cancelled</option>
         </select>
@@ -134,7 +157,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
       </form>
     </div>
 
-    <table class="data-table">
+    <div class="purchase-table-scroll"><table class="data-table">
       <thead>
         <tr>
           <th>PO Number</th>
@@ -157,7 +180,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
           <?php while ($row = mysqli_fetch_assoc($result)): ?>
             <tr>
               <td><span class="code-badge"><?php echo e($row['purchase_number']); ?></span></td>
-              <td><?php echo e(date('Y-m-d', strtotime($row['purchase_date']))); ?></td>
+              <td><?php echo e(formatDate($row['purchase_date'], $purchaseConfig['timezone'], 'Y-m-d')); ?></td>
               <td class="td-name"><?php echo e($row['supplier_name']); ?></td>
               <td><span class="code-badge" style="background:var(--bg); border:1px solid var(--border);"><?php echo e($row['location_code']); ?></span></td>
               <td class="td-bold" style="color:var(--blue);"><?php echo formatCurrency($row['total_amount'], $bizCur); ?></td>
@@ -166,6 +189,8 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
                   <span class="status-pill pill-green">Received</span>
                 <?php elseif ($row['status'] === 'ORDERED'): ?>
                   <span class="status-pill pill-blue">Ordered</span>
+                <?php elseif ($row['status'] === 'PARTIALLY_RECEIVED'): ?>
+                  <span class="status-pill pill-amber">Partially Received</span>
                 <?php elseif ($row['status'] === 'DRAFT'): ?>
                   <span class="status-pill pill-amber">Draft</span>
                 <?php else: ?>
@@ -183,16 +208,17 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
                       <input type="hidden" name="purchase_id" value="<?php echo (int)$row['id']; ?>">
                       <button type="submit" class="btn-sm" style="background:var(--blue); color:#fff; border:none;">Order</button>
                     </form>
-                  <?php elseif ($row['status'] === 'ORDERED' && $canReceivePurchase): ?>
+                  <?php elseif (in_array($row['status'], ['ORDERED','PARTIALLY_RECEIVED'], true) && $canReceivePurchase): ?>
                     <button class="btn-sm" style="background:var(--green); color:#fff; border:none;" onclick="triggerReceive(<?php echo (int)$row['id']; ?>)">Receive</button>
                   <?php endif; ?>
+                  <?php if (in_array($row['status'], ['PARTIALLY_RECEIVED','RECEIVED'], true) && $canReceivePurchase): ?><a class="btn-sm" href="?return_id=<?php echo (int)$row['id']; ?><?php echo getPreviewRole() !== null ? '&role=' . e(getPreviewRole()) : ''; ?>">Return</a><?php endif; ?>
                 </div>
               </td>
             </tr>
           <?php endwhile; ?>
         <?php endif; ?>
       </tbody>
-    </table>
+    </table></div>
 
     <!-- Pagination links -->
     <?php if ($total_pages > 1): ?>
@@ -235,6 +261,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
       <div class="modal-body">
         <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
         <input type="hidden" name="action" value="create">
+        <input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken()); ?>">
 
         <div class="field" style="margin-bottom: 12px;">
           <label for="po_num">PO Number <span style="color:var(--red);">*</span></label>
@@ -246,7 +273,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
         <div class="field" style="margin-bottom: 12px;">
           <label for="po_date">Order Date <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
-            <input type="datetime-local" name="purchase_date" id="po_date" value="<?php echo date('Y-m-d\TH:i'); ?>" required>
+            <input type="datetime-local" name="purchase_date" id="po_date" value="<?php echo e($purchaseLocalNow->format('Y-m-d\TH:i')); ?>" required>
           </div>
         </div>
 
@@ -345,6 +372,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
       <div class="modal-body">
         <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
         <input type="hidden" name="action" value="receive_po">
+        <input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken()); ?>">
         <input type="hidden" name="purchase_id" id="rc_po_id" value="">
         
         <div style="font-size:12px; color:var(--text3); margin-bottom:12px;">
@@ -356,7 +384,8 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
             <tr>
               <th>SKU / Product</th>
               <th>Ordered Qty</th>
-              <th>Received Qty</th>
+              <th>Previously Received</th>
+              <th>Receive Now</th>
             </tr>
           </thead>
           <tbody id="receiveItemsBody">
@@ -370,6 +399,7 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
             <input type="text" name="supplier_invoice_number" id="rc_invoice" placeholder="e.g. INV-92837">
           </div>
         </div>
+        <div class="field"><label for="rc_received_at">Received At</label><div class="field-wrap"><input type="datetime-local" name="received_at" id="rc_received_at" value="<?php echo e($purchaseLocalNow->format('Y-m-d\TH:i')); ?>" required></div></div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn-sm" onclick="closeReceive()">Cancel</button>
@@ -382,11 +412,11 @@ $canReceivePurchase = hasPermission($conn, $_SESSION['membership_id'] ?? null, $
 
 <!-- Simple raw data arrays for JS row rendering -->
 <script>
-var productsList = <?php echo json_encode($products_list); ?>;
+var productsList = <?php echo json_encode($products_list, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
 var bizCurCode = "<?php echo e($bizCur); ?>";
 
-// Add initial line row
-addItemRow();
+// Add initial line row only when the permission-protected form is rendered.
+if (document.getElementById('itemsContainer')) addItemRow();
 
 function openAddModal() {
   document.getElementById('addModalOverlay').style.display = 'flex';
@@ -403,22 +433,21 @@ function addItemRow() {
   const div = document.createElement('div');
   div.className = 'item-row';
   div.style.display = 'grid';
-  div.style.gridTemplateColumns = '1fr 80px 100px 30px';
+  div.style.gridTemplateColumns = 'minmax(200px,1.5fr) 90px 110px 140px 30px';
   div.style.gap = '6px';
   div.style.alignItems = 'center';
   div.id = 'row-' + index;
 
   let optionsHtml = '<option value="">-- Product --</option>';
   productsList.forEach(p => {
-    optionsHtml += `<option value="${p.id}" data-cost="${p.cost_price}">${p.name} (${p.sku})</option>`;
+    optionsHtml += `<option value="${p.id}" data-cost="${p.cost_price}" data-batches="${p.track_batches}" data-expiry="${p.track_expiry}">${p.name} (${p.sku})</option>`;
   });
 
   div.innerHTML = `
-    <select name="product_ids[]" required onchange="rowProductChanged(${index})" style="font-size:11.5px; padding:6px;">
-      ${optionsHtml}
-    </select>
+    <div><select class="purchase-product" name="product_ids[]" required onchange="rowProductChanged(${index})" style="font-size:11.5px;padding:6px;width:100%">${optionsHtml}</select><small class="batch-hint"></small></div>
     <input type="number" name="quantities[]" min="0.0001" step="0.0001" placeholder="Qty" required oninput="recalcPOSubtotal()" style="font-size:11.5px; padding:6px;">
     <input type="number" name="unit_costs[]" min="0" step="0.0001" placeholder="Cost" required oninput="recalcPOSubtotal()" style="font-size:11.5px; padding:6px;">
+    <div class="expiry-field" style="display:none"><input class="expiry-input" type="date" name="expiry_dates[]" title="Expiry date" style="font-size:11.5px;padding:6px;width:100%"><small class="batch-hint">Expiry date</small></div>
     <button type="button" class="btn-action reject" onclick="removeItemRow(${index})" style="padding:4px; font-size:11px; text-align:center;">X</button>
   `;
   
@@ -438,13 +467,22 @@ function removeItemRow(index) {
 
 function rowProductChanged(index) {
   const row = document.getElementById('row-' + index);
-  const select = row.querySelector('select');
+  const select = row.querySelector('.purchase-product');
   const costInput = row.querySelector('input[name="unit_costs[]"]');
   const selectedOpt = select.options[select.selectedIndex];
   const cost = selectedOpt.getAttribute('data-cost');
   if (cost) {
     costInput.value = parseFloat(cost).toFixed(4);
   }
+  const product = productsList.find(p => parseInt(p.id, 10) === parseInt(select.value || '0', 10));
+  const expiry = row.querySelector('.expiry-input');
+  const expiryField = row.querySelector('.expiry-field');
+  const needsBatch = product && parseInt(product.track_batches, 10) === 1;
+  const needsExpiry = product && parseInt(product.track_expiry, 10) === 1;
+  expiry.required = !!needsExpiry;
+  expiryField.style.display = needsExpiry ? 'block' : 'none';
+  if (!needsExpiry) expiry.value = '';
+  row.querySelector(':scope > div .batch-hint').textContent = needsBatch ? 'Lot/Batch generated automatically' : '';
   recalcPOSubtotal();
 }
 
@@ -564,7 +602,7 @@ if (isset($_GET['view_id'])):
         </div>
         <div>
           <strong style="color:var(--text3); text-transform:uppercase; font-size:10px;">Order Date</strong>
-          <div><?php echo formatDate($po['purchase_date']); ?></div>
+          <div><?php echo formatDate($po['purchase_date'], $purchaseConfig['timezone']); ?></div>
         </div>
         <div>
           <strong style="color:var(--text3); text-transform:uppercase; font-size:10px;">Invoice Number</strong>
@@ -609,7 +647,7 @@ if (isset($_GET['receive_id'])):
     $rQuery = "
         SELECT p.*
         FROM purchases p
-        WHERE p.id = ? AND p.business_id = ? AND p.status = 'ORDERED'
+        WHERE p.id = ? AND p.business_id = ? AND p.status IN ('ORDERED','PARTIALLY_RECEIVED')
         LIMIT 1
     ";
     $rStmt = mysqli_prepare($conn, $rQuery);
@@ -620,13 +658,14 @@ if (isset($_GET['receive_id'])):
     if ($po):
         // Fetch items
         $iQuery = "
-            SELECT pi.*, pr.name as product_name, pr.sku
+            SELECT pi.*,pr.name product_name,pr.sku,pr.uom,pb.lot_number,pb.expires_at
             FROM purchase_items pi
-            JOIN products pr ON pi.product_id = pr.id
-            WHERE pi.purchase_id = ?
+            JOIN products pr ON pi.product_id=pr.id AND pr.business_id=pi.business_id
+            LEFT JOIN product_batches pb ON pb.id=pi.batch_id AND pb.business_id=pi.business_id
+            WHERE pi.purchase_id=? AND pi.business_id=? AND pi.received_quantity < pi.ordered_quantity
         ";
         $iStmt = mysqli_prepare($conn, $iQuery);
-        mysqli_stmt_bind_param($iStmt, 'i', $receiveId);
+        mysqli_stmt_bind_param($iStmt, 'ii', $receiveId, $businessId);
         mysqli_stmt_execute($iStmt);
         $itemsRes = mysqli_stmt_get_result($iStmt);
 ?>
@@ -642,11 +681,13 @@ if (isset($_GET['receive_id'])):
           <td>
             <div style="font-weight:600;"><?php echo e($it['product_name']); ?></div>
             <span class="code-badge" style="font-size:10px;"><?php echo e($it['sku']); ?></span>
+            <?php if ($it['lot_number']): ?><small style="display:block;color:var(--text3)">Lot <?php echo e($it['lot_number']); ?><?php echo $it['expires_at'] ? ' · exp ' . e($it['expires_at']) : ''; ?></small><?php endif; ?>
             <input type="hidden" name="item_ids[]" value="<?php echo (int)$it['id']; ?>">
           </td>
-          <td><?php echo (float)$it['ordered_quantity']; ?></td>
+          <td><?php echo (float)$it['ordered_quantity']; ?> <?php echo e($it['uom']); ?></td>
+          <td><?php echo (float)$it['received_quantity']; ?></td>
           <td>
-            <input type="number" name="received_quantities[]" min="0" step="0.0001" value="<?php echo (float)$it['ordered_quantity']; ?>" required style="font-size:12px; padding:4px; width:100px;">
+            <input type="number" name="received_quantities[]" min="0" max="<?php echo e(number_format((float)$it['ordered_quantity'] - (float)$it['received_quantity'], 4, '.', '')); ?>" step="0.0001" value="<?php echo e(number_format((float)$it['ordered_quantity'] - (float)$it['received_quantity'], 4, '.', '')); ?>" required style="font-size:12px; padding:4px; width:110px;">
           </td>
         </tr>
       `;
@@ -660,5 +701,29 @@ if (isset($_GET['receive_id'])):
     endif;
 endif;
 ?>
+
+<?php
+if ($canReceivePurchase && isset($_GET['return_id'])):
+    $returnPurchaseId = (int)$_GET['return_id'];
+    $returnPurchaseStmt = mysqli_prepare($conn, "SELECT id,purchase_number,status FROM purchases WHERE id=? AND business_id=? AND status IN ('PARTIALLY_RECEIVED','RECEIVED')");
+    mysqli_stmt_bind_param($returnPurchaseStmt, 'ii', $returnPurchaseId, $businessId);
+    mysqli_stmt_execute($returnPurchaseStmt);
+    $returnPurchase = mysqli_fetch_assoc(mysqli_stmt_get_result($returnPurchaseStmt));
+    if ($returnPurchase):
+        $returnLineStmt = mysqli_prepare($conn, "SELECT pi.id,pi.received_quantity,pi.unit_cost,p.name,p.sku,p.uom,pb.lot_number,COALESCE((SELECT SUM(pri.quantity) FROM purchase_return_items pri JOIN purchase_returns pr ON pr.id=pri.purchase_return_id WHERE pri.purchase_item_id=pi.id AND pr.status='COMPLETED'),0) returned_quantity FROM purchase_items pi JOIN products p ON p.id=pi.product_id AND p.business_id=pi.business_id LEFT JOIN product_batches pb ON pb.id=pi.batch_id AND pb.business_id=pi.business_id WHERE pi.purchase_id=? AND pi.business_id=? AND pi.received_quantity>0 ORDER BY pi.id");
+        mysqli_stmt_bind_param($returnLineStmt, 'ii', $returnPurchaseId, $businessId);
+        mysqli_stmt_execute($returnLineStmt);
+        $returnLines = mysqli_stmt_get_result($returnLineStmt);
+?>
+<div class="modal-overlay" style="display:flex"><div class="modal-content-card modal-lg"><div class="modal-header"><div class="modal-title">Return Purchase Stock · <?php echo e($returnPurchase['purchase_number']); ?></div><a class="modal-close-btn" href="index.php<?php echo $role_query; ?>">×</a></div>
+<form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:flex;flex-direction:column;max-height:80vh"><div class="modal-body" style="overflow:auto"><input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>"><input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken()); ?>"><input type="hidden" name="action" value="return_purchase"><input type="hidden" name="purchase_id" value="<?php echo $returnPurchaseId; ?>">
+<div class="purchase-return-grid"><div class="field"><label>Return Number</label><div class="field-wrap"><input name="return_number" value="PRET-<?php echo e($purchaseLocalNow->format('YmdHis')); ?>" required></div></div><div class="field"><label>Return Date</label><div class="field-wrap"><input type="datetime-local" name="return_date" value="<?php echo e($purchaseLocalNow->format('Y-m-d\TH:i')); ?>" required></div></div></div>
+<div class="purchase-table-scroll"><table class="data-table"><thead><tr><th>Product</th><th>Received</th><th>Already Returned</th><th>Return Now</th><th>Cost</th></tr></thead><tbody><?php while($line=mysqli_fetch_assoc($returnLines)): $returnable=max(0,(float)$line['received_quantity']-(float)$line['returned_quantity']);?><tr><td><strong><?php echo e($line['name']);?></strong><small style="display:block;color:var(--text3)"><?php echo e($line['sku']);?><?php echo $line['lot_number']?' · Lot '.e($line['lot_number']):'';?></small></td><td><?php echo number_format($line['received_quantity'],4);?> <?php echo e($line['uom']);?></td><td><?php echo number_format($line['returned_quantity'],4);?></td><td><input type="hidden" name="item_ids[]" value="<?php echo (int)$line['id'];?>"><input type="number" name="return_quantities[]" min="0" max="<?php echo e(number_format($returnable,4,'.',''));?>" step=".0001" value="0" <?php echo $returnable<=0?'readonly':'';?>></td><td><?php echo formatCurrency($line['unit_cost'],$bizCur);?></td></tr><?php endwhile;?></tbody></table></div>
+<div class="field"><label>Reason</label><div class="field-wrap"><textarea name="reason" rows="3" required></textarea></div></div></div><div class="modal-footer"><a class="btn-sm" href="index.php<?php echo $role_query; ?>">Cancel</a><button class="btn-primary">Complete Purchase Return</button></div></form></div></div>
+<?php endif; endif; ?>
+
+<style>
+.business-context-notice{display:flex;align-items:center;gap:9px;margin-bottom:14px;padding:11px 14px;background:var(--card);border-radius:var(--radius);color:var(--text2);font-size:10.5px}.business-context-notice strong{color:var(--text);white-space:nowrap}.purchase-table-scroll{overflow:auto;max-height:68vh}.purchase-table-scroll table{min-width:820px}.purchase-table-scroll thead{position:sticky;top:0;z-index:2;background:var(--card)}#itemsContainer{overflow-x:auto}.batch-hint{display:block;font-size:9px;color:var(--text3);margin-top:3px}.purchase-return-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}@media(max-width:760px){#itemsContainer .item-row{grid-template-columns:1fr 1fr!important}#itemsContainer .item-row>.purchase-product,#itemsContainer .item-row>div{grid-column:1/-1}.purchase-return-grid{grid-template-columns:1fr}.business-context-notice{align-items:flex-start;flex-direction:column}}
+</style>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

@@ -3,3 +3,4 @@ composer.phar
 *.jpg
 *.png
 *.md
+/storage/reports/
