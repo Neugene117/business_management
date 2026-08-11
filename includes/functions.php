@@ -11,6 +11,18 @@ function e($value) {
 }
 
 /**
+ * Normalize an optional text field for nullable database columns.
+ *
+ * HTML forms submit blank inputs as empty strings. Converting those values to
+ * NULL keeps optional unique columns (such as a business registration number)
+ * from treating every blank input as the same duplicate value.
+ */
+function normalizeOptionalText($value): ?string {
+    $value = trim((string)$value);
+    return $value === '' ? null : $value;
+}
+
+/**
  * Format currency using dynamic currency code and DECIMALS
  */
 function formatCurrency($amount, $currency = 'RWF') {

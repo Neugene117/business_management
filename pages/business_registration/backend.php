@@ -32,8 +32,8 @@ if ($action === 'register') {
     }
     $business_email = strtolower(trim($_POST['business_email'] ?? ''));
     $business_phone = trim($_POST['business_phone'] ?? '');
-    $registration_number = trim($_POST['registration_number'] ?? NULL);
-    $tax_number = trim($_POST['tax_number'] ?? NULL);
+    $registration_number = normalizeOptionalText($_POST['registration_number'] ?? null);
+    $tax_number = normalizeOptionalText($_POST['tax_number'] ?? null);
     $country_code = trim($_POST['country_code'] ?? 'RW');
     $currency_code = trim($_POST['currency_code'] ?? 'RWF');
     $timezone = trim($_POST['timezone'] ?? 'Africa/Kigali');
@@ -87,7 +87,7 @@ if ($action === 'register') {
     }
 
     // Check if business registration number already exists
-    if (!empty($registration_number)) {
+    if ($registration_number !== null) {
         $checkRegQuery = "SELECT id FROM businesses WHERE registration_number = ? LIMIT 1";
         $crStmt = mysqli_prepare($conn, $checkRegQuery);
         mysqli_stmt_bind_param($crStmt, 's', $registration_number);
@@ -278,9 +278,21 @@ if ($action === 'register') {
             'A secure company logo filename could not be generated.',
             'The company logo could not be saved.'
         ];
-        $message = in_array($e->getMessage(), $safeUploadErrors, true)
-            ? $e->getMessage()
-            : 'Registration failed. Please try again. System error logged.';
+        if (in_array($e->getMessage(), $safeUploadErrors, true)) {
+            $message = $e->getMessage();
+        } elseif ((int)$e->getCode() === 1062 || stripos($e->getMessage(), 'Duplicate entry') !== false) {
+            if (stripos($e->getMessage(), 'uq_users_email') !== false) {
+                $message = 'The email address is already registered.';
+            } elseif (stripos($e->getMessage(), 'uq_users_phone') !== false) {
+                $message = 'The phone number is already registered.';
+            } elseif (stripos($e->getMessage(), 'uq_businesses_registration_number') !== false) {
+                $message = 'The business registration number is already registered.';
+            } else {
+                $message = 'One of the supplied values is already registered. Please review your details.';
+            }
+        } else {
+            $message = 'Registration failed. Please try again. System error logged.';
+        }
         setFlashMessage('error', $message);
         header("Location: index.php");
         exit();

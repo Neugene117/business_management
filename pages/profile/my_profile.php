@@ -1,5 +1,9 @@
 <?php
 $page_title = "My Profile";
+// Load the canonical application connection explicitly. The header uses
+// require_once as well, so this remains safe and makes this page's dependency
+// on the business_management database unambiguous.
+require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../includes/header.php';
 requireLogin();
 

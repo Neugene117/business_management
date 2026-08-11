@@ -233,8 +233,8 @@ switch ($action) {
         $legal_name = trim($_POST['legal_name'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
         $email = strtolower(trim($_POST['email'] ?? ''));
-        $tax_number = trim($_POST['tax_number'] ?? NULL);
-        $registration_number = trim($_POST['registration_number'] ?? NULL);
+        $tax_number = normalizeOptionalText($_POST['tax_number'] ?? null);
+        $registration_number = normalizeOptionalText($_POST['registration_number'] ?? null);
         $country_code = trim($_POST['country_code'] ?? 'RW');
         $city = trim($_POST['city'] ?? '');
         $address_line1 = trim($_POST['address_line1'] ?? '');
