@@ -357,6 +357,7 @@ INSERT INTO `business_role_permissions` (`business_id`, `business_role_id`, `per
 (1, 1, 46),
 (1, 1, 47),
 (1, 1, 48),
+(1, 1, 49),
 (1, 2, 6),
 (1, 2, 7),
 (1, 2, 8),
@@ -926,7 +927,7 @@ INSERT INTO `permissions` (`id`, `scope`, `code`, `module`, `name`, `description
 (20, 'BUSINESS', 'customers.update', 'customers', 'Update customers', NULL, '2026-08-08 13:06:11.165622'),
 (21, 'BUSINESS', 'purchases.view', 'purchases', 'View purchases', NULL, '2026-08-08 13:06:11.165622'),
 (22, 'BUSINESS', 'purchases.create', 'purchases', 'Create purchases', NULL, '2026-08-08 13:06:11.165622'),
-(23, 'BUSINESS', 'purchases.update', 'purchases', 'Update draft purchases', NULL, '2026-08-08 13:06:11.165622'),
+(23, 'BUSINESS', 'purchases.update', 'purchases', 'Edit purchases', 'Edit purchase details and record additional payments.', '2026-08-08 13:06:11.165622'),
 (24, 'BUSINESS', 'purchases.approve', 'purchases', 'Approve purchases', NULL, '2026-08-08 13:06:11.165622'),
 (25, 'BUSINESS', 'purchases.receive', 'purchases', 'Receive purchased stock', NULL, '2026-08-08 13:06:11.165622'),
 (26, 'BUSINESS', 'sales.view', 'sales', 'View sales', NULL, '2026-08-08 13:06:11.165622'),
@@ -951,7 +952,8 @@ INSERT INTO `permissions` (`id`, `scope`, `code`, `module`, `name`, `description
 (45, 'BUSINESS', 'leave.approve', 'leave', 'Approve or reject leave requests', NULL, '2026-08-08 13:06:11.165622'),
 (46, 'BUSINESS', 'settings.view', 'settings', 'View business settings', NULL, '2026-08-08 13:06:11.165622'),
 (47, 'BUSINESS', 'settings.update', 'settings', 'Update business settings', NULL, '2026-08-08 13:06:11.165622'),
-(48, 'BUSINESS', 'audit.view', 'audit', 'View business audit logs', NULL, '2026-08-08 13:06:11.165622');
+(48, 'BUSINESS', 'audit.view', 'audit', 'View business audit logs', NULL, '2026-08-08 13:06:11.165622'),
+(49, 'BUSINESS', 'purchases.delete', 'purchases', 'Delete purchases', 'Delete purchases and safely reverse received stock when possible.', '2026-08-12 00:00:00.000000');
 
 -- --------------------------------------------------------
 
@@ -1095,6 +1097,7 @@ CREATE TABLE `purchases` (
   `location_id` bigint(20) UNSIGNED NOT NULL,
   `supplier_id` bigint(20) UNSIGNED NOT NULL,
   `purchase_number` varchar(64) NOT NULL,
+  `purchase_type` enum('DIRECT','PURCHASE_ORDER') NOT NULL DEFAULT 'PURCHASE_ORDER',
   `supplier_invoice_number` varchar(100) DEFAULT NULL,
   `status` enum('DRAFT','ORDERED','PARTIALLY_RECEIVED','RECEIVED','CANCELLED') NOT NULL DEFAULT 'DRAFT',
   `purchase_date` datetime(6) NOT NULL,
@@ -1119,9 +1122,9 @@ CREATE TABLE `purchases` (
 -- Dumping data for table `purchases`
 --
 
-INSERT INTO `purchases` (`id`, `business_id`, `location_id`, `supplier_id`, `purchase_number`, `supplier_invoice_number`, `status`, `purchase_date`, `expected_date`, `received_at`, `subtotal`, `discount_amount`, `tax_amount`, `shipping_amount`, `total_amount`, `amount_paid`, `payment_status`, `notes`, `created_by_membership_id`, `approved_by_membership_id`, `received_by_membership_id`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 1, 'PUR-2026-0001', 'INV-RWD-1001', 'RECEIVED', '2026-08-02 07:30:00.000000', '2026-08-02', '2026-08-02 09:00:00.000000', 519000.0000, 0.0000, 0.0000, 0.0000, 519000.0000, 519000.0000, 'PAID', 'Initial August stock purchase', 4, 1, 4, '2026-08-08 13:06:12.321639', '2026-08-08 13:06:12.321639'),
-(2, 1, 1, 2, 'PUR-2026-0002', 'INV-FFR-2001', 'RECEIVED', '2026-08-04 06:45:00.000000', '2026-08-04', '2026-08-04 08:00:00.000000', 54800.0000, 0.0000, 0.0000, 0.0000, 54800.0000, 54800.0000, 'PAID', 'Replenishment purchase', 4, 2, 4, '2026-08-08 13:06:12.652341', '2026-08-08 13:06:12.652341');
+INSERT INTO `purchases` (`id`, `business_id`, `location_id`, `supplier_id`, `purchase_number`, `purchase_type`, `supplier_invoice_number`, `status`, `purchase_date`, `expected_date`, `received_at`, `subtotal`, `discount_amount`, `tax_amount`, `shipping_amount`, `total_amount`, `amount_paid`, `payment_status`, `notes`, `created_by_membership_id`, `approved_by_membership_id`, `received_by_membership_id`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 1, 'PUR-2026-0001', 'PURCHASE_ORDER', 'INV-RWD-1001', 'RECEIVED', '2026-08-02 07:30:00.000000', '2026-08-02', '2026-08-02 09:00:00.000000', 519000.0000, 0.0000, 0.0000, 0.0000, 519000.0000, 519000.0000, 'PAID', 'Initial August stock purchase', 4, 1, 4, '2026-08-08 13:06:12.321639', '2026-08-08 13:06:12.321639'),
+(2, 1, 1, 2, 'PUR-2026-0002', 'PURCHASE_ORDER', 'INV-FFR-2001', 'RECEIVED', '2026-08-04 06:45:00.000000', '2026-08-04', '2026-08-04 08:00:00.000000', 54800.0000, 0.0000, 0.0000, 0.0000, 54800.0000, 54800.0000, 'PAID', 'Replenishment purchase', 4, 2, 4, '2026-08-08 13:06:12.652341', '2026-08-08 13:06:12.652341');
 
 -- --------------------------------------------------------
 
@@ -2436,7 +2439,7 @@ ALTER TABLE `leave_types`
 -- AUTO_INCREMENT for table `permissions`
 --
 ALTER TABLE `permissions`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=49;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=50;
 
 --
 -- AUTO_INCREMENT for table `platform_roles`

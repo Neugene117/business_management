@@ -44,7 +44,7 @@ mysqli_stmt_execute($countStmt);
 $totalRows = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($countStmt))['total'] ?? 0);
 $totalPages = (int)ceil($totalRows / $limit);
 
-$listSql = "SELECT p.id,p.purchase_number,p.supplier_invoice_number,p.status,p.purchase_date,p.received_at,
+$listSql = "SELECT p.id,p.purchase_number,p.purchase_type,p.supplier_invoice_number,p.status,p.purchase_date,p.received_at,
         s.name supplier_name,l.name location_name,l.code location_code,
         COUNT(pi.id) line_count,
         COALESCE(SUM(pi.ordered_quantity*pi.unit_cost),0) ordered_value,
@@ -55,7 +55,7 @@ $listSql = "SELECT p.id,p.purchase_number,p.supplier_invoice_number,p.status,p.p
     JOIN business_locations l ON l.id=p.location_id AND l.business_id=p.business_id
     JOIN purchase_items pi ON pi.purchase_id=p.id AND pi.business_id=p.business_id
     $where
-    GROUP BY p.id,p.purchase_number,p.supplier_invoice_number,p.status,p.purchase_date,p.received_at,s.name,l.name,l.code
+    GROUP BY p.id,p.purchase_number,p.purchase_type,p.supplier_invoice_number,p.status,p.purchase_date,p.received_at,s.name,l.name,l.code
     ORDER BY FIELD(p.status,'PARTIALLY_RECEIVED','ORDERED','RECEIVED'),p.purchase_date DESC
     LIMIT ? OFFSET ?";
 $listStmt = mysqli_prepare($conn, $listSql);
@@ -113,8 +113,8 @@ if ((int)($_GET['purchase_id'] ?? 0) > 0) {
 ?>
 
 <div class="receiving-page-head">
-  <div><h1>Purchase Receiving</h1><p>Track ordered stock, post partial receipts, and complete purchase orders.</p></div>
-  <a class="btn-sm" href="../purchase/index<?php echo e($roleQuery); ?>">View Purchase Orders</a>
+  <div><h1>Purchase Receiving</h1><p>Receive direct purchases immediately or complete stock receipts for purchase orders.</p></div>
+  <a class="btn-sm" href="../purchase/index<?php echo e($roleQuery); ?>">View Purchases</a>
 </div>
 
 <div class="receiving-summary">
@@ -130,17 +130,17 @@ if ((int)($_GET['purchase_id'] ?? 0) > 0) {
     <form method="GET" class="receiving-filter">
       <?php if (getPreviewRole()): ?><input type="hidden" name="role" value="<?php echo e(getPreviewRole()); ?>"><?php endif; ?>
       <select name="status"><option value="pending" <?php echo $statusFilter==='pending'?'selected':''; ?>>Pending</option><option value="received" <?php echo $statusFilter==='received'?'selected':''; ?>>Fully Received</option><option value="all" <?php echo $statusFilter==='all'?'selected':''; ?>>All Purchases</option></select>
-      <input name="search" value="<?php echo e($search); ?>" placeholder="PO, supplier, or invoice">
+      <input name="search" value="<?php echo e($search); ?>" placeholder="Purchase, supplier, or invoice">
       <button class="btn-sm">Filter</button>
     </form>
   </div>
   <div class="receiving-table-wrap"><table class="data-table receiving-table">
-    <thead><tr><th>Purchase Order</th><th>Supplier / Location</th><th>Receipt Progress</th><th>Received Value</th><th>Remaining Value</th><th>Status</th><th class="receipt-actions">Action</th></tr></thead>
+    <thead><tr><th>Purchase</th><th>Supplier / Location</th><th>Receipt Progress</th><th>Received Value</th><th>Remaining Value</th><th>Status</th><th class="receipt-actions">Action</th></tr></thead>
     <tbody>
       <?php if (mysqli_num_rows($purchases) === 0): ?><tr><td colspan="7" class="receiving-empty">No purchases match the selected receiving status.</td></tr>
       <?php else: while ($purchase = mysqli_fetch_assoc($purchases)): $orderedValue=(float)$purchase['ordered_value'];$receivedValue=(float)$purchase['received_value'];$progress=$orderedValue>0?min(100,($receivedValue/$orderedValue)*100):100;$completed=$purchase['status']==='RECEIVED'; ?>
         <tr>
-          <td><strong><?php echo e($purchase['purchase_number']); ?></strong><small><?php echo e(formatDate($purchase['purchase_date'],$config['timezone'],'d M Y')); ?> &middot; <?php echo (int)$purchase['line_count']; ?> product line(s)</small></td>
+          <td><strong><?php echo e($purchase['purchase_number']); ?></strong><small><?php echo $purchase['purchase_type']==='DIRECT'?'Direct Purchase':'Purchase Order'; ?> &middot; <?php echo e(formatDate($purchase['purchase_date'],$config['timezone'],'d M Y')); ?> &middot; <?php echo (int)$purchase['line_count']; ?> product line(s)</small></td>
           <td><strong><?php echo e($purchase['supplier_name']); ?></strong><small><?php echo e($purchase['location_code'].' · '.$purchase['location_name']); ?></small></td>
           <td><div class="receipt-progress"><div style="width:<?php echo e(number_format($progress,2,'.','')); ?>%"></div></div><small><?php echo number_format($progress,1); ?>% of value received</small></td>
           <td class="value-received"><?php echo formatCurrency($purchase['received_value'],$currency); ?></td>

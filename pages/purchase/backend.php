@@ -27,6 +27,8 @@ $roleQuery = isset($_GET['role']) ? '?role=' . rawurlencode((string)$_GET['role'
 $requestedReturn = (string)($_POST['return_to'] ?? '');
 if ($requestedReturn === 'receiving') {
     $returnPath = '../receiving/index';
+} elseif ($requestedReturn === 'purchase_create') {
+    $returnPath = 'create';
 } elseif (preg_match('/^receiving_view:(\d+)$/', $requestedReturn, $receivingMatch)) {
     $returnPath = '../receiving/view?id=' . (int)$receivingMatch[1];
     $roleQuery = isset($_GET['role']) ? '&role=' . rawurlencode((string)$_GET['role']) : '';
@@ -46,6 +48,7 @@ try {
     if ($action === 'create') {
         requirePermission($conn, $membershipId, $businessId, $permissions['create']);
         $purchaseNumber = trim((string)($_POST['purchase_number'] ?? ''));
+        $purchaseType = strtoupper(trim((string)($_POST['purchase_type'] ?? '')));
         $purchaseDateInput = trim((string)($_POST['purchase_date'] ?? ''));
         $supplierId = (int)($_POST['supplier_id'] ?? 0);
         $locationId = (int)($_POST['location_id'] ?? 0);
@@ -56,6 +59,7 @@ try {
         $unitSellingPrices = is_array($_POST['unit_selling_prices'] ?? null) ? $_POST['unit_selling_prices'] : [];
         $expiryDates = is_array($_POST['expiry_dates'] ?? null) ? $_POST['expiry_dates'] : [];
         $settlementType = strtoupper(trim((string)($_POST['settlement_type'] ?? 'DEBT')));
+        $paymentAmountInput = trim((string)($_POST['payment_amount'] ?? ''));
         $paymentMethod = strtoupper(trim((string)($_POST['payment_method'] ?? 'CASH')));
         $paymentPhone = trim((string)($_POST['payment_phone'] ?? '')) ?: null;
         $bankName = trim((string)($_POST['bank_name'] ?? '')) ?: null;
@@ -64,8 +68,10 @@ try {
         $paymentNotes = trim((string)($_POST['payment_notes'] ?? '')) ?: null;
         $idempotencyKey = trim((string)($_POST['idempotency_key'] ?? ''));
         if ($purchaseNumber === '' || $purchaseDateInput === '' || $supplierId <= 0 || $locationId <= 0 || !$productIds) {
-            throw new InvalidArgumentException('PO number, date, supplier, target location, and at least one item are required.');
+            throw new InvalidArgumentException('Purchase number, date, supplier, target location, and at least one item are required.');
         }
+        if (!in_array($purchaseType, ['DIRECT','PURCHASE_ORDER'], true)) throw new InvalidArgumentException('Choose Direct Purchase or Purchase Order.');
+        if ($purchaseType === 'DIRECT') requirePermission($conn, $membershipId, $businessId, $permissions['receive']);
         if (!in_array($settlementType, ['PAID','DEBT'], true)) throw new InvalidArgumentException('Select whether this purchase was paid or recorded as debt.');
         $allowedPaymentMethods = ['CASH','MOBILE_MONEY','BANK_TRANSFER'];
         if ($settlementType === 'PAID' && !in_array($paymentMethod, $allowedPaymentMethods, true)) throw new InvalidArgumentException('Select Cash, Phone, or Bank as the payment method.');
@@ -83,7 +89,7 @@ try {
 
         mysqli_begin_transaction($conn);
         try {
-            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_CREATE', ['purchase_number'=>$purchaseNumber,'date'=>$purchaseDateInput,'supplier_id'=>$supplierId,'location_id'=>$locationId,'products'=>$productIds,'quantities'=>$quantities,'costs'=>$unitCosts,'selling_prices'=>$unitSellingPrices,'settlement_type'=>$settlementType,'payment_method'=>$settlementType==='PAID'?$paymentMethod:null,'payment_phone'=>$paymentPhone,'bank_name'=>$bankName,'bank_account_number'=>$bankAccountNumber]);
+            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_CREATE', ['purchase_number'=>$purchaseNumber,'purchase_type'=>$purchaseType,'date'=>$purchaseDateInput,'supplier_id'=>$supplierId,'location_id'=>$locationId,'products'=>$productIds,'quantities'=>$quantities,'costs'=>$unitCosts,'selling_prices'=>$unitSellingPrices,'settlement_type'=>$settlementType,'payment_method'=>$settlementType==='PAID'?$paymentMethod:null,'payment_phone'=>$paymentPhone,'bank_name'=>$bankName,'bank_account_number'=>$bankAccountNumber]);
             $supplierStmt = mysqli_prepare($conn, 'SELECT id FROM suppliers WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
             mysqli_stmt_bind_param($supplierStmt, 'ii', $supplierId, $businessId);
             mysqli_stmt_execute($supplierStmt);
@@ -92,7 +98,7 @@ try {
             mysqli_stmt_bind_param($locationStmt, 'ii', $locationId, $businessId);
             mysqli_stmt_execute($locationStmt);
             if (!mysqli_fetch_assoc(mysqli_stmt_get_result($locationStmt))) throw new RuntimeException('Select a valid active location.');
-            $businessStmt = mysqli_prepare($conn, 'SELECT business_name FROM businesses WHERE id=? LIMIT 1');
+            $businessStmt = mysqli_prepare($conn, 'SELECT business_name,currency_code FROM businesses WHERE id=? LIMIT 1');
             mysqli_stmt_bind_param($businessStmt, 'i', $businessId);
             mysqli_stmt_execute($businessStmt);
             $business = mysqli_fetch_assoc(mysqli_stmt_get_result($businessStmt));
@@ -100,11 +106,13 @@ try {
             $duplicate = mysqli_prepare($conn, 'SELECT id FROM purchases WHERE business_id=? AND purchase_number=? FOR UPDATE');
             mysqli_stmt_bind_param($duplicate, 'is', $businessId, $purchaseNumber);
             mysqli_stmt_execute($duplicate);
-            if (mysqli_fetch_assoc(mysqli_stmt_get_result($duplicate))) throw new RuntimeException('A purchase order with this number already exists.');
+            if (mysqli_fetch_assoc(mysqli_stmt_get_result($duplicate))) throw new RuntimeException('A purchase with this number already exists.');
 
-            $purchaseStmt = mysqli_prepare($conn, "INSERT INTO purchases (business_id,location_id,supplier_id,purchase_number,status,purchase_date,payment_status,notes,created_by_membership_id,created_at,updated_at) VALUES (?,?,?,?,'DRAFT',?,?,?,?,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))");
-            mysqli_stmt_bind_param($purchaseStmt, 'iiissssi', $businessId, $locationId, $supplierId, $purchaseNumber, $purchaseDate, $settlementType, $notes, $membershipId);
-            if (!mysqli_stmt_execute($purchaseStmt)) throw new RuntimeException('The purchase order could not be created.');
+            $initialStatus = $purchaseType === 'DIRECT' ? 'ORDERED' : 'DRAFT';
+            $approvedByMembershipId = $purchaseType === 'DIRECT' ? $membershipId : null;
+            $purchaseStmt = mysqli_prepare($conn, "INSERT INTO purchases (business_id,location_id,supplier_id,purchase_number,purchase_type,status,purchase_date,payment_status,notes,created_by_membership_id,approved_by_membership_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))");
+            mysqli_stmt_bind_param($purchaseStmt, 'iiissssssii', $businessId, $locationId, $supplierId, $purchaseNumber, $purchaseType, $initialStatus, $purchaseDate, $settlementType, $notes, $membershipId, $approvedByMembershipId);
+            if (!mysqli_stmt_execute($purchaseStmt)) throw new RuntimeException('The purchase could not be created.');
             $purchaseId = mysqli_insert_id($conn);
             $subtotal = 0.0;
             $validItems = 0;
@@ -138,29 +146,244 @@ try {
                 $itemStmt = mysqli_prepare($conn, 'INSERT INTO purchase_items (business_id,purchase_id,product_id,batch_id,ordered_quantity,received_quantity,unit_cost,unit_selling_price,discount_amount,tax_amount,line_total,created_at) VALUES (?,?,?,?,?,0,?,?,0,0,?,UTC_TIMESTAMP(6))');
                 mysqli_stmt_bind_param($itemStmt, 'iiiidddd', $businessId, $purchaseId, $productId, $batchId, $quantity, $unitCost, $unitSellingPrice, $lineTotal);
                 if (!mysqli_stmt_execute($itemStmt)) throw new RuntimeException('A purchase item could not be saved.');
+                $purchaseItemId = mysqli_insert_id($conn);
+                if ($purchaseType === 'DIRECT') {
+                    $receiveItem = mysqli_prepare($conn, 'UPDATE purchase_items SET received_quantity=ordered_quantity WHERE id=? AND purchase_id=? AND business_id=?');
+                    mysqli_stmt_bind_param($receiveItem, 'iii', $purchaseItemId, $purchaseId, $businessId);
+                    if (!mysqli_stmt_execute($receiveItem)) throw new RuntimeException('The direct purchase line could not be marked received.');
+                    applyInventoryMovement($conn, [
+                        'business_id'=>$businessId,
+                        'location_id'=>$locationId,
+                        'product_id'=>$productId,
+                        'batch_id'=>$batchId,
+                        'movement_type'=>'PURCHASE_RECEIPT',
+                        'quantity_delta'=>$quantity,
+                        'unit_cost'=>$unitCost,
+                        'occurred_at'=>$purchaseDate,
+                        'purchase_item_id'=>$purchaseItemId,
+                        'created_by_membership_id'=>$membershipId,
+                        'notes'=>$purchaseNumber . ' automatic direct-purchase receipt',
+                        'config'=>$config
+                    ]);
+                    $priceStmt = mysqli_prepare($conn, 'UPDATE products SET sale_price=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
+                    mysqli_stmt_bind_param($priceStmt, 'dii', $unitSellingPrice, $productId, $businessId);
+                    if (!mysqli_stmt_execute($priceStmt)) throw new RuntimeException('The product selling price could not be updated.');
+                }
                 $subtotal += $lineTotal;
                 $validItems++;
             }
             if ($validItems === 0) throw new InvalidArgumentException('Add at least one valid purchase item.');
-            $amountPaid = $settlementType === 'PAID' ? $subtotal : 0.0;
+            $amountPaid = 0.0;
+            $paymentStatus = 'DEBT';
+            if ($settlementType === 'PAID') {
+                $amountPaid = $paymentAmountInput === '' ? $subtotal : (float)$paymentAmountInput;
+                if ($amountPaid <= 0) throw new InvalidArgumentException('Payment Amount must be greater than zero.');
+                if ($amountPaid > $subtotal + 0.00005) throw new InvalidArgumentException('Payment Amount cannot be greater than the purchase total of ' . formatCurrency($subtotal, $business['currency_code'] ?? 'RWF') . '.');
+                $paymentStatus = $amountPaid + 0.00005 >= $subtotal ? 'PAID' : 'PARTIALLY_PAID';
+            }
             $totals = mysqli_prepare($conn, 'UPDATE purchases SET subtotal=?,total_amount=?,amount_paid=?,payment_status=? WHERE id=? AND business_id=?');
-            mysqli_stmt_bind_param($totals, 'dddsii', $subtotal, $subtotal, $amountPaid, $settlementType, $purchaseId, $businessId);
+            mysqli_stmt_bind_param($totals, 'dddsii', $subtotal, $subtotal, $amountPaid, $paymentStatus, $purchaseId, $businessId);
             mysqli_stmt_execute($totals);
             if ($settlementType === 'PAID') {
                 $paymentStmt = mysqli_prepare($conn, 'INSERT INTO purchase_payments (business_id,purchase_id,amount,payment_method,reference_number,phone_number,bank_name,bank_account_number,paid_at,recorded_by_membership_id,notes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6))');
                 mysqli_stmt_bind_param($paymentStmt, 'iidssssssis', $businessId, $purchaseId, $amountPaid, $paymentMethod, $paymentReference, $paymentPhone, $bankName, $bankAccountNumber, $purchaseDate, $membershipId, $paymentNotes);
                 if (!mysqli_stmt_execute($paymentStmt)) throw new RuntimeException('The purchase payment could not be recorded.');
             }
-            writeAuditLog($conn, $businessId, 'PURCHASE_ORDER_CREATED', 'purchase', $purchaseId, ['purchase_number'=>$purchaseNumber,'total_amount'=>$subtotal,'items'=>$validItems,'payment_status'=>$settlementType,'payment_method'=>$settlementType==='PAID'?$paymentMethod:null]);
+            if ($purchaseType === 'DIRECT') {
+                $receivePurchase = mysqli_prepare($conn, "UPDATE purchases SET status='RECEIVED',received_at=?,received_by_membership_id=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?");
+                mysqli_stmt_bind_param($receivePurchase, 'siii', $purchaseDate, $membershipId, $purchaseId, $businessId);
+                if (!mysqli_stmt_execute($receivePurchase)) throw new RuntimeException('The direct purchase could not be completed as received.');
+            }
+            writeAuditLog($conn, $businessId, $purchaseType === 'DIRECT' ? 'DIRECT_PURCHASE_CREATED_AND_RECEIVED' : 'PURCHASE_ORDER_CREATED', 'purchase', $purchaseId, ['purchase_number'=>$purchaseNumber,'purchase_type'=>$purchaseType,'initial_status'=>$purchaseType==='DIRECT'?'RECEIVED':$initialStatus,'total_amount'=>$subtotal,'items'=>$validItems,'payment_status'=>$paymentStatus,'amount_paid'=>$amountPaid,'remaining_balance'=>max(0,$subtotal-$amountPaid),'payment_method'=>$settlementType==='PAID'?$paymentMethod:null]);
             completeIdempotencyKey($conn, $businessId, $idempotencyKey, 201, ['purchase_id'=>$purchaseId]);
             mysqli_commit($conn);
-            if ($requestedReturn === 'purchase_create') {
-                setFlashMessage('success', $settlementType === 'PAID' ? 'Purchase order and payment recorded successfully.' : 'Purchase order recorded as supplier debt.');
+            if ($purchaseType === 'DIRECT') {
+                setFlashMessage('success', $paymentStatus === 'PAID' ? 'Direct purchase recorded, paid, and received. Stock is now available.' : ($paymentStatus === 'PARTIALLY_PAID' ? 'Direct purchase recorded and received. The partial payment was saved.' : 'Direct purchase recorded as supplier debt and received. Stock is now available.'));
                 $viewRole = isset($_GET['role']) ? '&role=' . rawurlencode((string)$_GET['role']) : '';
                 header('Location: view?id=' . $purchaseId . $viewRole);
                 exit;
             }
+            if ($requestedReturn === 'purchase_create') {
+                $viewRole = isset($_GET['role']) ? '&role=' . rawurlencode((string)$_GET['role']) : '';
+                setFlashMessage('success', $paymentStatus === 'PAID' ? 'Purchase order and payment recorded successfully.' : ($paymentStatus === 'PARTIALLY_PAID' ? 'Purchase order and partial payment recorded successfully.' : 'Purchase order recorded as supplier debt.'));
+                header('Location: view?id=' . $purchaseId . $viewRole);
+                exit;
+            }
             $finish('Purchase order created in Draft.', 'success');
+        } catch (Throwable $error) {
+            mysqli_rollback($conn);
+            throw $error;
+        }
+    }
+
+    if ($action === 'update_purchase') {
+        requirePermission($conn, $membershipId, $businessId, $permissions['update']);
+        $purchaseId = (int)($_POST['purchase_id'] ?? 0);
+        $purchaseNumber = trim((string)($_POST['purchase_number'] ?? ''));
+        $purchaseDateInput = trim((string)($_POST['purchase_date'] ?? ''));
+        $supplierId = (int)($_POST['supplier_id'] ?? 0);
+        $locationId = (int)($_POST['location_id'] ?? 0);
+        $supplierInvoice = trim((string)($_POST['supplier_invoice_number'] ?? '')) ?: null;
+        $notes = trim((string)($_POST['notes'] ?? '')) ?: null;
+        if ($purchaseId <= 0 || $purchaseNumber === '' || $purchaseDateInput === '' || $supplierId <= 0 || $locationId <= 0) {
+            throw new InvalidArgumentException('Purchase number, date, supplier, and location are required.');
+        }
+        $config = getBusinessInventoryConfig($conn, $businessId);
+        $purchaseDate = businessLocalDateTimeToUtc($purchaseDateInput, $config['timezone']);
+        mysqli_begin_transaction($conn);
+        try {
+            $currentStmt = mysqli_prepare($conn, 'SELECT p.*,COALESCE(SUM(pi.received_quantity),0) received_quantity FROM purchases p LEFT JOIN purchase_items pi ON pi.purchase_id=p.id AND pi.business_id=p.business_id WHERE p.id=? AND p.business_id=? GROUP BY p.id FOR UPDATE');
+            mysqli_stmt_bind_param($currentStmt, 'ii', $purchaseId, $businessId);
+            mysqli_stmt_execute($currentStmt);
+            $current = mysqli_fetch_assoc(mysqli_stmt_get_result($currentStmt));
+            if (!$current) throw new RuntimeException('The purchase could not be found.');
+            if ((float)$current['received_quantity'] > 0.00005 && $locationId !== (int)$current['location_id']) {
+                throw new RuntimeException('The receiving location cannot be changed after stock has been received.');
+            }
+            $supplierStmt = mysqli_prepare($conn, 'SELECT id FROM suppliers WHERE id=? AND business_id=? LIMIT 1');
+            mysqli_stmt_bind_param($supplierStmt, 'ii', $supplierId, $businessId);
+            mysqli_stmt_execute($supplierStmt);
+            if (!mysqli_fetch_assoc(mysqli_stmt_get_result($supplierStmt))) throw new RuntimeException('Select a valid supplier.');
+            $locationStmt = mysqli_prepare($conn, 'SELECT id FROM business_locations WHERE id=? AND business_id=? LIMIT 1');
+            mysqli_stmt_bind_param($locationStmt, 'ii', $locationId, $businessId);
+            mysqli_stmt_execute($locationStmt);
+            if (!mysqli_fetch_assoc(mysqli_stmt_get_result($locationStmt))) throw new RuntimeException('Select a valid location.');
+            $duplicate = mysqli_prepare($conn, 'SELECT id FROM purchases WHERE business_id=? AND purchase_number=? AND id<>? LIMIT 1');
+            mysqli_stmt_bind_param($duplicate, 'isi', $businessId, $purchaseNumber, $purchaseId);
+            mysqli_stmt_execute($duplicate);
+            if (mysqli_fetch_assoc(mysqli_stmt_get_result($duplicate))) throw new RuntimeException('A purchase with this number already exists.');
+            $update = mysqli_prepare($conn, 'UPDATE purchases SET purchase_number=?,purchase_date=?,supplier_id=?,location_id=?,supplier_invoice_number=?,notes=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
+            mysqli_stmt_bind_param($update, 'ssiissii', $purchaseNumber, $purchaseDate, $supplierId, $locationId, $supplierInvoice, $notes, $purchaseId, $businessId);
+            if (!mysqli_stmt_execute($update)) throw new RuntimeException('The purchase details could not be updated.');
+            writeAuditLog($conn, $businessId, 'PURCHASE_UPDATED', 'purchase', $purchaseId, [
+                'purchase_number'=>$purchaseNumber,
+                'supplier_id'=>$supplierId,
+                'location_id'=>$locationId,
+                'supplier_invoice_number'=>$supplierInvoice
+            ]);
+            mysqli_commit($conn);
+            $finish('Purchase details updated successfully.', 'success');
+        } catch (Throwable $error) {
+            mysqli_rollback($conn);
+            throw $error;
+        }
+    }
+
+    if ($action === 'add_payment') {
+        requirePermission($conn, $membershipId, $businessId, $permissions['update']);
+        $purchaseId = (int)($_POST['purchase_id'] ?? 0);
+        $amount = (float)($_POST['payment_amount'] ?? 0);
+        $paymentMethod = strtoupper(trim((string)($_POST['payment_method'] ?? 'CASH')));
+        $paymentDateInput = trim((string)($_POST['paid_at'] ?? ''));
+        $paymentPhone = trim((string)($_POST['payment_phone'] ?? '')) ?: null;
+        $bankName = trim((string)($_POST['bank_name'] ?? '')) ?: null;
+        $bankAccountNumber = trim((string)($_POST['bank_account_number'] ?? '')) ?: null;
+        $paymentReference = trim((string)($_POST['payment_reference'] ?? '')) ?: null;
+        $paymentNotes = trim((string)($_POST['payment_notes'] ?? '')) ?: null;
+        $idempotencyKey = trim((string)($_POST['idempotency_key'] ?? ''));
+        if ($purchaseId <= 0 || $amount <= 0 || $paymentDateInput === '') throw new InvalidArgumentException('Payment amount and payment date are required.');
+        if (!in_array($paymentMethod, ['CASH','MOBILE_MONEY','BANK_TRANSFER'], true)) throw new InvalidArgumentException('Select Cash, Phone, or Bank as the payment method.');
+        if ($paymentMethod === 'MOBILE_MONEY' && $paymentPhone === null) throw new InvalidArgumentException('Enter the telephone number used for the phone payment.');
+        if ($paymentMethod === 'BANK_TRANSFER' && ($bankName === null || $bankAccountNumber === null)) throw new InvalidArgumentException('Enter the bank name and bank account number.');
+        if ($paymentMethod === 'CASH') $paymentPhone = $bankName = $bankAccountNumber = null;
+        if ($paymentMethod === 'MOBILE_MONEY') $bankName = $bankAccountNumber = null;
+        if ($paymentMethod === 'BANK_TRANSFER') $paymentPhone = null;
+        $config = getBusinessInventoryConfig($conn, $businessId);
+        $paidAt = businessLocalDateTimeToUtc($paymentDateInput, $config['timezone']);
+        mysqli_begin_transaction($conn);
+        try {
+            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_PAYMENT', ['purchase_id'=>$purchaseId,'amount'=>$amount,'payment_method'=>$paymentMethod,'paid_at'=>$paymentDateInput,'reference'=>$paymentReference]);
+            $purchaseStmt = mysqli_prepare($conn, 'SELECT p.id,p.purchase_number,p.total_amount,p.amount_paid,b.currency_code FROM purchases p JOIN businesses b ON b.id=p.business_id WHERE p.id=? AND p.business_id=? FOR UPDATE');
+            mysqli_stmt_bind_param($purchaseStmt, 'ii', $purchaseId, $businessId);
+            mysqli_stmt_execute($purchaseStmt);
+            $purchase = mysqli_fetch_assoc(mysqli_stmt_get_result($purchaseStmt));
+            if (!$purchase) throw new RuntimeException('The purchase could not be found.');
+            $balance = max(0.0, (float)$purchase['total_amount'] - (float)$purchase['amount_paid']);
+            if ($balance <= 0.00005) throw new RuntimeException('This purchase is already paid.');
+            if ($amount > $balance + 0.00005) throw new InvalidArgumentException('Payment Amount cannot be greater than the outstanding balance of ' . formatCurrency($balance, $purchase['currency_code'] ?? 'RWF') . '.');
+            $paymentStmt = mysqli_prepare($conn, 'INSERT INTO purchase_payments (business_id,purchase_id,amount,payment_method,reference_number,phone_number,bank_name,bank_account_number,paid_at,recorded_by_membership_id,notes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6))');
+            mysqli_stmt_bind_param($paymentStmt, 'iidssssssis', $businessId, $purchaseId, $amount, $paymentMethod, $paymentReference, $paymentPhone, $bankName, $bankAccountNumber, $paidAt, $membershipId, $paymentNotes);
+            if (!mysqli_stmt_execute($paymentStmt)) throw new RuntimeException('The payment could not be recorded.');
+            $newPaid = (float)$purchase['amount_paid'] + $amount;
+            $remainingBalance = max(0.0, (float)$purchase['total_amount'] - $newPaid);
+            $paymentStatus = $newPaid + 0.00005 >= (float)$purchase['total_amount'] ? 'PAID' : 'PARTIALLY_PAID';
+            $update = mysqli_prepare($conn, 'UPDATE purchases SET amount_paid=?,payment_status=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
+            mysqli_stmt_bind_param($update, 'dsii', $newPaid, $paymentStatus, $purchaseId, $businessId);
+            if (!mysqli_stmt_execute($update)) throw new RuntimeException('The purchase payment total could not be updated.');
+            writeAuditLog($conn, $businessId, 'PURCHASE_PAYMENT_RECORDED', 'purchase', $purchaseId, ['amount'=>$amount,'payment_method'=>$paymentMethod,'payment_status'=>$paymentStatus,'remaining_balance'=>$remainingBalance]);
+            completeIdempotencyKey($conn, $businessId, $idempotencyKey, 201, ['purchase_id'=>$purchaseId,'payment_status'=>$paymentStatus,'remaining_balance'=>$remainingBalance]);
+            mysqli_commit($conn);
+            $finish($paymentStatus === 'PAID' ? 'Payment recorded. The purchase is now Paid.' : 'Partial payment recorded. Remaining balance: ' . formatCurrency($remainingBalance, $purchase['currency_code'] ?? 'RWF') . '.', 'success');
+        } catch (Throwable $error) {
+            mysqli_rollback($conn);
+            throw $error;
+        }
+    }
+
+    if ($action === 'delete_purchase') {
+        requirePermission($conn, $membershipId, $businessId, $permissions['delete']);
+        $purchaseId = (int)($_POST['purchase_id'] ?? 0);
+        if ($purchaseId <= 0) throw new InvalidArgumentException('Select a valid purchase to delete.');
+        $config = getBusinessInventoryConfig($conn, $businessId);
+        $deletedAt = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
+        mysqli_begin_transaction($conn);
+        try {
+            $purchaseStmt = mysqli_prepare($conn, 'SELECT id,purchase_number,location_id,status,total_amount FROM purchases WHERE id=? AND business_id=? FOR UPDATE');
+            mysqli_stmt_bind_param($purchaseStmt, 'ii', $purchaseId, $businessId);
+            mysqli_stmt_execute($purchaseStmt);
+            $purchase = mysqli_fetch_assoc(mysqli_stmt_get_result($purchaseStmt));
+            if (!$purchase) throw new RuntimeException('The purchase could not be found.');
+            $returnStmt = mysqli_prepare($conn, 'SELECT COUNT(*) return_count FROM purchase_returns WHERE purchase_id=? AND business_id=?');
+            mysqli_stmt_bind_param($returnStmt, 'ii', $purchaseId, $businessId);
+            mysqli_stmt_execute($returnStmt);
+            if ((int)mysqli_fetch_assoc(mysqli_stmt_get_result($returnStmt))['return_count'] > 0) {
+                throw new RuntimeException('This purchase has stock returns and cannot be deleted. Keep it as part of the inventory audit history.');
+            }
+            $items = [];
+            $itemStmt = mysqli_prepare($conn, 'SELECT id,product_id,batch_id,received_quantity,unit_cost FROM purchase_items WHERE purchase_id=? AND business_id=? ORDER BY id FOR UPDATE');
+            mysqli_stmt_bind_param($itemStmt, 'ii', $purchaseId, $businessId);
+            mysqli_stmt_execute($itemStmt);
+            $itemResult = mysqli_stmt_get_result($itemStmt);
+            while ($item = mysqli_fetch_assoc($itemResult)) $items[] = $item;
+            foreach ($items as $item) {
+                $receivedQuantity = (float)$item['received_quantity'];
+                if ($receivedQuantity <= 0.00005) continue;
+                $unitCost = (float)$item['unit_cost'];
+                if (($config['inventory_valuation_method'] ?? 'WEIGHTED_AVERAGE') === 'FIFO') {
+                    $fifo = consumeFifoCost($conn, $businessId, (int)$purchase['location_id'], (int)$item['product_id'], $receivedQuantity, !empty($item['batch_id']) ? (int)$item['batch_id'] : null);
+                    $unitCost = (float)$fifo['unit_cost'];
+                }
+                applyInventoryMovement($conn, [
+                    'business_id'=>$businessId,
+                    'location_id'=>(int)$purchase['location_id'],
+                    'product_id'=>(int)$item['product_id'],
+                    'batch_id'=>!empty($item['batch_id']) ? (int)$item['batch_id'] : null,
+                    'movement_type'=>'CORRECTION_OUT',
+                    'quantity_delta'=>-$receivedQuantity,
+                    'unit_cost'=>$unitCost,
+                    'occurred_at'=>$deletedAt,
+                    'created_by_membership_id'=>$membershipId,
+                    'notes'=>'Stock reversal for deleted purchase ' . $purchase['purchase_number'],
+                    'config'=>$config
+                ]);
+            }
+            $detachMovements = mysqli_prepare($conn, 'UPDATE inventory_movements im JOIN purchase_items pi ON pi.id=im.purchase_item_id AND pi.business_id=im.business_id SET im.purchase_item_id=NULL WHERE pi.purchase_id=? AND pi.business_id=?');
+            mysqli_stmt_bind_param($detachMovements, 'ii', $purchaseId, $businessId);
+            if (!mysqli_stmt_execute($detachMovements)) throw new RuntimeException('The purchase inventory history could not be preserved.');
+            $detachLayers = mysqli_prepare($conn, 'UPDATE inventory_cost_layers icl JOIN purchase_items pi ON pi.id=icl.purchase_item_id AND pi.business_id=icl.business_id SET icl.purchase_item_id=NULL WHERE pi.purchase_id=? AND pi.business_id=?');
+            mysqli_stmt_bind_param($detachLayers, 'ii', $purchaseId, $businessId);
+            if (!mysqli_stmt_execute($detachLayers)) throw new RuntimeException('The purchase costing history could not be preserved.');
+            $deletePayments = mysqli_prepare($conn, 'DELETE FROM purchase_payments WHERE purchase_id=? AND business_id=?');
+            mysqli_stmt_bind_param($deletePayments, 'ii', $purchaseId, $businessId);
+            if (!mysqli_stmt_execute($deletePayments)) throw new RuntimeException('Purchase payments could not be removed.');
+            writeAuditLog($conn, $businessId, 'PURCHASE_DELETED', 'purchase', $purchaseId, ['purchase_number'=>$purchase['purchase_number'],'previous_status'=>$purchase['status'],'total_amount'=>$purchase['total_amount'],'stock_reversed'=>true]);
+            $deletePurchase = mysqli_prepare($conn, 'DELETE FROM purchases WHERE id=? AND business_id=?');
+            mysqli_stmt_bind_param($deletePurchase, 'ii', $purchaseId, $businessId);
+            if (!mysqli_stmt_execute($deletePurchase) || mysqli_stmt_affected_rows($deletePurchase) !== 1) throw new RuntimeException('The purchase could not be deleted.');
+            mysqli_commit($conn);
+            setFlashMessage('success', 'Purchase deleted successfully. Any received stock was reversed safely.');
+            header('Location: index' . (isset($_GET['role']) ? '?role=' . rawurlencode((string)$_GET['role']) : ''));
+            exit;
         } catch (Throwable $error) {
             mysqli_rollback($conn);
             throw $error;
@@ -199,7 +422,7 @@ try {
             mysqli_stmt_bind_param($purchaseStmt, 'ii', $purchaseId, $businessId);
             mysqli_stmt_execute($purchaseStmt);
             $purchase = mysqli_fetch_assoc(mysqli_stmt_get_result($purchaseStmt));
-            if (!$purchase || !in_array($purchase['status'], ['ORDERED','PARTIALLY_RECEIVED'], true)) throw new RuntimeException('Only Ordered or Partially Received purchase orders can be received.');
+            if (!$purchase || !in_array($purchase['status'], ['ORDERED','PARTIALLY_RECEIVED'], true)) throw new RuntimeException('Only purchases ready for receiving or partially received purchases can be received.');
 
             $receivedLines = 0;
             $receivedValue = 0.0;

@@ -11,6 +11,7 @@ requirePermission($conn, $membershipId, $businessId, $permissions['view']);
 
 $canCreatePurchase = hasPermission($conn, $membershipId, $businessId, $permissions['create']);
 $canUpdatePurchase = hasPermission($conn, $membershipId, $businessId, $permissions['update']);
+$canDeletePurchase = hasPermission($conn, $membershipId, $businessId, $permissions['delete']);
 $canReceivePurchase = hasPermission($conn, $membershipId, $businessId, $permissions['receive']);
 $config = getBusinessInventoryConfig($conn, $businessId);
 $localNow = new DateTimeImmutable('now', new DateTimeZone($config['timezone']));
@@ -28,6 +29,9 @@ $search = trim((string)($_GET['search'] ?? ''));
 $statusFilter = strtoupper(trim((string)($_GET['status'] ?? '')));
 $validStatuses = ['DRAFT','ORDERED','PARTIALLY_RECEIVED','RECEIVED','CANCELLED'];
 if (!in_array($statusFilter, $validStatuses, true)) $statusFilter = '';
+$typeFilter = strtoupper(trim((string)($_GET['type'] ?? '')));
+$validTypes = ['DIRECT','PURCHASE_ORDER'];
+if (!in_array($typeFilter, $validTypes, true)) $typeFilter = '';
 $page = max(1, (int)($_GET['page'] ?? 1));
 $limit = 20;
 $offset = ($page - 1) * $limit;
@@ -46,6 +50,11 @@ if ($statusFilter !== '') {
     $params[] = $statusFilter;
     $types .= 's';
 }
+if ($typeFilter !== '') {
+    $where .= ' AND p.purchase_type=?';
+    $params[] = $typeFilter;
+    $types .= 's';
+}
 
 $countStmt = mysqli_prepare($conn, "SELECT COUNT(*) total FROM purchases p JOIN suppliers s ON s.id=p.supplier_id AND s.business_id=p.business_id $where");
 mysqli_stmt_bind_param($countStmt, $types, ...$params);
@@ -53,7 +62,7 @@ mysqli_stmt_execute($countStmt);
 $totalRows = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($countStmt))['total'] ?? 0);
 $totalPages = (int)ceil($totalRows/$limit);
 
-$listStmt = mysqli_prepare($conn, "SELECT p.id,p.purchase_number,p.supplier_invoice_number,p.status,p.purchase_date,p.received_at,p.total_amount,p.amount_paid,p.payment_status,p.notes,
+$listStmt = mysqli_prepare($conn, "SELECT p.id,p.purchase_number,p.purchase_type,p.supplier_invoice_number,p.status,p.purchase_date,p.received_at,p.total_amount,p.amount_paid,p.payment_status,p.notes,
         s.name supplier_name,l.name location_name,l.code location_code,COUNT(pi.id) line_count,
         COALESCE(SUM(pi.received_quantity*pi.unit_cost),0) received_value,
         COALESCE(SUM((pi.ordered_quantity-pi.received_quantity)*pi.unit_cost),0) remaining_value
@@ -62,7 +71,7 @@ $listStmt = mysqli_prepare($conn, "SELECT p.id,p.purchase_number,p.supplier_invo
     JOIN business_locations l ON l.id=p.location_id AND l.business_id=p.business_id
     LEFT JOIN purchase_items pi ON pi.purchase_id=p.id AND pi.business_id=p.business_id
     $where
-    GROUP BY p.id,p.purchase_number,p.supplier_invoice_number,p.status,p.purchase_date,p.received_at,p.total_amount,p.amount_paid,p.payment_status,p.notes,s.name,l.name,l.code
+    GROUP BY p.id,p.purchase_number,p.purchase_type,p.supplier_invoice_number,p.status,p.purchase_date,p.received_at,p.total_amount,p.amount_paid,p.payment_status,p.notes,s.name,l.name,l.code
     ORDER BY p.purchase_date DESC,p.id DESC LIMIT ? OFFSET ?");
 $listParams = array_merge($params,[$limit,$offset]);
 $listTypes = $types . 'ii';
@@ -70,7 +79,7 @@ mysqli_stmt_bind_param($listStmt,$listTypes,...$listParams);
 mysqli_stmt_execute($listStmt);
 $purchases = mysqli_stmt_get_result($listStmt);
 
-$summaryStmt = mysqli_prepare($conn, "SELECT COUNT(*) total_orders,SUM(status='DRAFT') draft_orders,SUM(status IN ('ORDERED','PARTIALLY_RECEIVED')) pending_orders,SUM(status='RECEIVED') received_orders,COALESCE(SUM(total_amount),0) total_value FROM purchases WHERE business_id=?");
+$summaryStmt = mysqli_prepare($conn, "SELECT COUNT(*) total_purchases,SUM(purchase_type='DIRECT') direct_purchases,SUM(purchase_type='PURCHASE_ORDER') purchase_orders,SUM(status IN ('DRAFT','ORDERED','PARTIALLY_RECEIVED')) open_purchases,SUM(status='RECEIVED') received_purchases,COALESCE(SUM(total_amount),0) total_value FROM purchases WHERE business_id=?");
 mysqli_stmt_bind_param($summaryStmt,'i',$businessId);
 mysqli_stmt_execute($summaryStmt);
 $summary = mysqli_fetch_assoc(mysqli_stmt_get_result($summaryStmt)) ?: [];
@@ -94,7 +103,7 @@ $statusMeta = static function(string $status): array {
         default => ['Cancelled','pill-red'],
     };
 };
-$queryBase = array_filter(['search'=>$search,'status'=>$statusFilter,'role'=>getPreviewRole()],static fn($value)=>$value!==null&&$value!=='');
+$queryBase = array_filter(['search'=>$search,'status'=>$statusFilter,'type'=>$typeFilter,'role'=>getPreviewRole()],static fn($value)=>$value!==null&&$value!=='');
 $closeQuery = http_build_query($queryBase);
 if ((int)($_GET['view_id'] ?? 0) > 0) {
     $legacyViewParams = array_merge($queryBase, ['id' => (int)$_GET['view_id']]);
@@ -104,24 +113,25 @@ if ((int)($_GET['view_id'] ?? 0) > 0) {
 ?>
 
 <main class="purchase-workspace">
-<div class="purchase-page-head"><div><h1>Purchases</h1><p>Manage supplier orders and receiving in one place.</p></div><div class="purchase-head-actions"><a class="btn-sm receiving-link" href="../receiving/index<?php echo e($roleQuery); ?>">Purchase Receiving</a><?php if($canCreatePurchase):?><a class="btn-primary purchase-create-link" href="create<?php echo e($roleQuery); ?>"><span class="purchase-create-icon" aria-hidden="true"><svg viewBox="0 0 20 20" focusable="false"><path d="M4 3h9l3 3v11H4V3Zm9 0v4h3M7 11h6M10 8v6"/></svg></span><span>Record Purchase</span></a><?php endif;?></div></div>
+<div class="purchase-page-head"><div><h1>Purchases</h1><p>Create direct purchases or purchase orders, then track receiving in one place.</p></div><div class="purchase-head-actions"><a class="btn-sm receiving-link" href="../receiving/index<?php echo e($roleQuery); ?>">Purchase Receiving</a><?php if($canCreatePurchase):?><a class="btn-primary purchase-create-link" href="create<?php echo e($roleQuery); ?>"><span class="purchase-create-icon" aria-hidden="true"><svg viewBox="0 0 20 20" focusable="false"><path d="M4 3h9l3 3v11H4V3Zm9 0v4h3M7 11h6M10 8v6"/></svg></span><span>Start Purchase</span></a><?php endif;?></div></div>
 
 <div class="purchase-summary">
-  <div class="card purchase-value-card"><span>Total Ordered Value</span><strong><?php echo formatCurrency($summary['total_value']??0,$currency);?></strong><small>Across recorded orders</small></div>
-  <div class="card"><span>Total Orders</span><strong><?php echo (int)($summary['total_orders']??0);?></strong><small>All purchase orders</small></div>
-  <div class="card"><span>Open Orders</span><strong><?php echo (int)($summary['draft_orders']??0)+(int)($summary['pending_orders']??0);?></strong><small><?php echo (int)($summary['draft_orders']??0);?> draft &middot; <?php echo (int)($summary['pending_orders']??0);?> receiving</small></div>
-  <div class="card"><span>Fully Received</span><strong><?php echo (int)($summary['received_orders']??0);?></strong><small>Completed purchases</small></div>
+  <div class="card purchase-value-card"><span>Total Purchase Value</span><strong><?php echo formatCurrency($summary['total_value']??0,$currency);?></strong><small>Across all purchase methods</small></div>
+  <div class="card"><span>Direct Purchases</span><strong><?php echo (int)($summary['direct_purchases']??0);?></strong><small>Immediate receiving workflow</small></div>
+  <div class="card"><span>Purchase Orders</span><strong><?php echo (int)($summary['purchase_orders']??0);?></strong><small>Separate order workflow</small></div>
+  <div class="card"><span>Open Purchases</span><strong><?php echo (int)($summary['open_purchases']??0);?></strong><small>Awaiting workflow completion</small></div>
+  <div class="card"><span>Fully Received</span><strong><?php echo (int)($summary['received_purchases']??0);?></strong><small>Completed purchases</small></div>
 </div>
 
 <section class="card purchase-directory">
-  <div class="purchase-toolbar"><div><div class="card-title">Purchase Orders</div><p><?php echo number_format($totalRows);?> order(s) found</p></div><form method="GET" class="purchase-filter"><?php if(getPreviewRole()):?><input type="hidden" name="role" value="<?php echo e(getPreviewRole());?>"><?php endif;?><select name="status" aria-label="Filter by status"><option value="">All statuses</option><?php foreach($validStatuses as $status):$meta=$statusMeta($status);?><option value="<?php echo $status;?>" <?php echo $statusFilter===$status?'selected':'';?>><?php echo e($meta[0]);?></option><?php endforeach;?></select><input type="search" name="search" value="<?php echo e($search);?>" placeholder="Search PO, supplier, or invoice" aria-label="Search purchases"><button class="btn-sm">Apply Filters</button><?php if($search!==''||$statusFilter!==''):?><a class="btn-sm" href="index<?php echo e($roleQuery);?>">Clear Filters</a><?php endif;?></form></div>
-  <div class="purchase-table-wrap table-scroll" tabindex="0" aria-label="Purchase orders"><table class="data-table purchase-table"><thead><tr><th>Order &amp; Supplier</th><th>Delivery</th><th>Value</th><th>Receiving</th><th>Status</th><th class="purchase-actions">Actions</th></tr></thead><tbody>
-    <?php if(mysqli_num_rows($purchases)===0):?><tr><td colspan="6" class="purchase-empty">No purchase orders match the selected filters.</td></tr>
+  <div class="purchase-toolbar"><div><div class="card-title">Purchase Records</div><p><?php echo number_format($totalRows);?> purchase(s) found</p></div><form method="GET" class="purchase-filter"><?php if(getPreviewRole()):?><input type="hidden" name="role" value="<?php echo e(getPreviewRole());?>"><?php endif;?><select name="type" aria-label="Filter by purchase method"><option value="">All methods</option><option value="DIRECT" <?php echo $typeFilter==='DIRECT'?'selected':'';?>>Direct Purchase</option><option value="PURCHASE_ORDER" <?php echo $typeFilter==='PURCHASE_ORDER'?'selected':'';?>>Purchase Order</option></select><select name="status" aria-label="Filter by status"><option value="">All statuses</option><?php foreach($validStatuses as $status):$meta=$statusMeta($status);?><option value="<?php echo $status;?>" <?php echo $statusFilter===$status?'selected':'';?>><?php echo e($meta[0]);?></option><?php endforeach;?></select><input type="search" name="search" value="<?php echo e($search);?>" placeholder="Search number, supplier, or invoice" aria-label="Search purchases"><button class="btn-sm">Apply Filters</button><?php if($search!==''||$statusFilter!==''||$typeFilter!==''):?><a class="btn-sm" href="index<?php echo e($roleQuery);?>">Clear Filters</a><?php endif;?></form></div>
+  <div class="purchase-table-wrap table-scroll" tabindex="0" aria-label="Purchases"><table class="data-table purchase-table"><thead><tr><th>Purchase &amp; Supplier</th><th>Delivery</th><th>Value</th><th>Receiving</th><th>Status</th><th class="purchase-actions">Actions</th></tr></thead><tbody>
+    <?php if(mysqli_num_rows($purchases)===0):?><tr><td colspan="6" class="purchase-empty">No purchases match the selected filters.</td></tr>
     <?php else:while($purchase=mysqli_fetch_assoc($purchases)):$meta=$statusMeta($purchase['status']);$total=(float)$purchase['total_amount'];$received=(float)$purchase['received_value'];$progress=$purchase['status']==='RECEIVED'?100:($total>0?min(100,($received/$total)*100):0);?>
-      <tr><td class="purchase-order-cell"><strong><?php echo e($purchase['purchase_number']);?></strong><small><?php echo e($purchase['supplier_name']);?></small><?php if($purchase['supplier_invoice_number']):?><small>Invoice <?php echo e($purchase['supplier_invoice_number']);?></small><?php endif;?></td><td><span class="location-badge"><?php echo e($purchase['location_code']);?></span><small><?php echo e($purchase['location_name']);?> &middot; <?php echo e(formatDate($purchase['purchase_date'],$config['timezone'],'d M Y'));?></small></td><td class="order-value"><?php echo formatCurrency($purchase['total_amount'],$currency);?><small><?php echo (int)$purchase['line_count'];?> product line(s) &middot; <?php echo e($purchase['payment_status']==='PAID'?'Paid':($purchase['payment_status']==='PARTIALLY_PAID'?'Partially paid':'Debt'));?></small></td><td><div class="po-progress"><div style="width:<?php echo e(number_format($progress,2,'.',''));?>%"></div></div><small><?php echo e(number_format($progress,0));?>% received &middot; <?php echo formatCurrency($purchase['remaining_value'],$currency);?> pending</small></td><td><span class="status-pill <?php echo $meta[1];?>"><?php echo e($meta[0]);?></span></td><td class="purchase-actions"><a class="btn-sm purchase-view-action" href="view?<?php echo e(http_build_query(array_merge($queryBase,['id'=>(int)$purchase['id']])));?>">View Purchase Details</a><?php if(($purchase['status']==='DRAFT'&&$canUpdatePurchase)||(in_array($purchase['status'],['ORDERED','PARTIALLY_RECEIVED'],true)&&$canReceivePurchase)||(in_array($purchase['status'],['PARTIALLY_RECEIVED','RECEIVED'],true)&&$canReceivePurchase)):?><details class="purchase-action-menu"><summary aria-label="Purchase actions for <?php echo e($purchase['purchase_number']);?>">Purchase Actions</summary><div><?php if($purchase['status']==='DRAFT'&&$canUpdatePurchase):?><form action="backend<?php echo e($roleQuery);?>" method="POST" onsubmit="return confirm('Mark this purchase order as ordered?');"><input type="hidden" name="csrf_token" value="<?php echo e($csrfToken);?>"><input type="hidden" name="action" value="mark_ordered"><input type="hidden" name="purchase_id" value="<?php echo (int)$purchase['id'];?>"><button>Mark as Ordered</button></form><?php elseif(in_array($purchase['status'],['ORDERED','PARTIALLY_RECEIVED'],true)&&$canReceivePurchase):?><a href="../receiving/view?id=<?php echo (int)$purchase['id'];?><?php echo getPreviewRole()?'&role='.e(getPreviewRole()):'';?>">Receive Purchase</a><?php endif;?><?php if(in_array($purchase['status'],['PARTIALLY_RECEIVED','RECEIVED'],true)&&$canReceivePurchase):?><a href="?<?php echo e(http_build_query(array_merge($queryBase,['return_id'=>(int)$purchase['id']])));?>">Return Purchased Stock</a><?php endif;?></div></details><?php endif;?></td></tr>
+      <tr><td class="purchase-order-cell"><strong><?php echo e($purchase['purchase_number']);?></strong><span class="purchase-type-badge <?php echo $purchase['purchase_type']==='DIRECT'?'type-direct':'type-order';?>"><?php echo $purchase['purchase_type']==='DIRECT'?'Direct Purchase':'Purchase Order';?></span><small><?php echo e($purchase['supplier_name']);?></small><?php if($purchase['supplier_invoice_number']):?><small>Invoice <?php echo e($purchase['supplier_invoice_number']);?></small><?php endif;?></td><td><span class="location-badge"><?php echo e($purchase['location_code']);?></span><small><?php echo e($purchase['location_name']);?> &middot; <?php echo e(formatDate($purchase['purchase_date'],$config['timezone'],'d M Y'));?></small></td><td class="order-value"><?php echo formatCurrency($purchase['total_amount'],$currency);?><small><?php echo e($purchase['payment_status']==='PAID'?'Paid':($purchase['payment_status']==='PARTIALLY_PAID'?'Partially paid':'Debt'));?> &middot; <?php echo formatCurrency(max(0,(float)$purchase['total_amount']-(float)$purchase['amount_paid']),$currency);?> due</small></td><td><div class="po-progress"><div style="width:<?php echo e(number_format($progress,2,'.',''));?>%"></div></div><small><?php echo e(number_format($progress,0));?>% received &middot; <?php echo formatCurrency($purchase['remaining_value'],$currency);?> pending</small></td><td><span class="status-pill <?php echo $meta[1];?>"><?php echo e($meta[0]);?></span></td><td class="purchase-actions"><a class="btn-sm purchase-view-action" href="view?<?php echo e(http_build_query(array_merge($queryBase,['id'=>(int)$purchase['id']])));?>">View Purchase Details</a><?php if($canUpdatePurchase||$canDeletePurchase||($purchase['status']==='DRAFT'&&$canUpdatePurchase)||(in_array($purchase['status'],['ORDERED','PARTIALLY_RECEIVED'],true)&&$canReceivePurchase)||(in_array($purchase['status'],['PARTIALLY_RECEIVED','RECEIVED'],true)&&$canReceivePurchase)):?><details class="purchase-action-menu"><summary aria-label="Purchase actions for <?php echo e($purchase['purchase_number']);?>">Purchase Actions</summary><div><?php if($canUpdatePurchase):?><a href="edit?<?php echo e(http_build_query(array_merge($queryBase,['id'=>(int)$purchase['id']])));?>#record-payment"><?php echo (float)$purchase['total_amount']-(float)$purchase['amount_paid']>0.00005?'Pay Remaining Balance':'Edit Purchase';?></a><?php endif;?><?php if($purchase['status']==='DRAFT'&&$canUpdatePurchase):?><form action="backend<?php echo e($roleQuery);?>" method="POST" onsubmit="return confirm('Mark this purchase order as ordered?');"><input type="hidden" name="csrf_token" value="<?php echo e($csrfToken);?>"><input type="hidden" name="action" value="mark_ordered"><input type="hidden" name="purchase_id" value="<?php echo (int)$purchase['id'];?>"><button>Mark as Ordered</button></form><?php elseif(in_array($purchase['status'],['ORDERED','PARTIALLY_RECEIVED'],true)&&$canReceivePurchase):?><a href="../receiving/view?id=<?php echo (int)$purchase['id'];?><?php echo getPreviewRole()?'&role='.e(getPreviewRole()):'';?>">Receive Purchase</a><?php endif;?><?php if(in_array($purchase['status'],['PARTIALLY_RECEIVED','RECEIVED'],true)&&$canReceivePurchase):?><a href="?<?php echo e(http_build_query(array_merge($queryBase,['return_id'=>(int)$purchase['id']])));?>">Return Purchased Stock</a><?php endif;?><?php if($canDeletePurchase):?><form action="backend<?php echo e($roleQuery);?>" method="POST" onsubmit="return confirm('Delete <?php echo e($purchase['purchase_number']); ?>? Received stock will be reversed. This action cannot be undone.');"><input type="hidden" name="csrf_token" value="<?php echo e($csrfToken);?>"><input type="hidden" name="action" value="delete_purchase"><input type="hidden" name="purchase_id" value="<?php echo (int)$purchase['id'];?>"><button class="purchase-delete-action">Delete Purchase</button></form><?php endif;?></div></details><?php endif;?></td></tr>
     <?php endwhile;endif;?>
   </tbody></table></div>
-  <?php if($totalPages>1):?><div class="purchase-pagination"><span>Page <?php echo $page;?> of <?php echo $totalPages;?> &middot; <?php echo $totalRows;?> orders</span><div><?php if($page>1):?><a class="btn-sm" href="?<?php echo e(http_build_query(array_merge($queryBase,['page'=>$page-1])));?>">Previous Page</a><?php endif;?><?php if($page<$totalPages):?><a class="btn-sm" href="?<?php echo e(http_build_query(array_merge($queryBase,['page'=>$page+1])));?>">Next Page</a><?php endif;?></div></div><?php endif;?>
+  <?php if($totalPages>1):?><div class="purchase-pagination"><span>Page <?php echo $page;?> of <?php echo $totalPages;?> &middot; <?php echo $totalRows;?> purchases</span><div><?php if($page>1):?><a class="btn-sm" href="?<?php echo e(http_build_query(array_merge($queryBase,['page'=>$page-1])));?>">Previous Page</a><?php endif;?><?php if($page<$totalPages):?><a class="btn-sm" href="?<?php echo e(http_build_query(array_merge($queryBase,['page'=>$page+1])));?>">Next Page</a><?php endif;?></div></div><?php endif;?>
 </section>
 </main>
 
@@ -185,6 +195,11 @@ if($canReceivePurchase&&$returnId>0){$returnStmt=mysqli_prepare($conn,"SELECT id
 @media(max-width:1050px){.purchase-summary{grid-template-columns:1fr 1fr}.purchase-filter{margin-left:0}.financial-value-grid>div{border-bottom:1px solid var(--border)}.financial-value-grid>div:nth-child(4n){border-right:0}}
 @media(max-width:760px){.purchase-workspace{width:100%}.purchase-page-head{align-items:stretch}.purchase-summary{grid-template-columns:1fr 1fr}.purchase-toolbar{align-items:stretch}.purchase-filter{width:100%;grid-template-columns:1fr auto}.purchase-filter input{width:100%;grid-column:1/-1}.modal-content-card.details-modal-card{width:100vw;height:100vh;max-width:none;max-height:none;border-radius:0}.financial-value-grid>div:nth-child(even){border-right:0}.financial-value-grid>div:nth-child(odd){border-right:1px solid var(--border)}}
 @media(max-width:480px){.purchase-summary{grid-template-columns:1fr}}
+.purchase-workspace .purchase-summary{grid-template-columns:1.35fr repeat(4,1fr)}.purchase-type-badge{display:inline-flex;margin:5px 0 1px;padding:3px 6px;border-radius:999px;font-size:7.5px;font-weight:750;line-height:1.2;text-transform:uppercase;letter-spacing:.04em}.purchase-type-badge.type-direct{background:var(--green-bg);color:var(--green)}.purchase-type-badge.type-order{background:var(--blue-bg);color:var(--blue)}
+.purchase-action-menu .purchase-delete-action{color:var(--red)}.purchase-action-menu .purchase-delete-action:hover{background:var(--red-bg);color:var(--red)}
+@media(max-width:1050px){.purchase-workspace .purchase-summary{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:760px){.purchase-workspace .purchase-summary{grid-template-columns:1fr 1fr}.purchase-filter{grid-template-columns:1fr 1fr auto}.purchase-filter input{grid-column:1/-1}}
+@media(max-width:480px){.purchase-workspace .purchase-summary{grid-template-columns:1fr}}
 </style>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>
