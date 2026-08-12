@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/../../config/session.php';
 require_once __DIR__ . '/../../config/database.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../includes/tenant.php';
 require_once __DIR__ . '/../../includes/permission_helper.php';
@@ -31,20 +33,17 @@ switch ($action) {
 
         $sku = strtoupper(trim($_POST['sku'] ?? ''));
         $name = trim($_POST['name'] ?? '');
-        $category = trim($_POST['category'] ?? NULL);
-        $uom = strtoupper(trim($_POST['uom'] ?? 'UNIT'));
-        $cost_price = (float)($_POST['cost_price'] ?? 0.0);
-        $sale_price = (float)($_POST['sale_price'] ?? 0.0);
-        $reorder_level = (float)($_POST['reorder_level'] ?? 0.0);
+        $categoryId = (int)($_POST['category_id'] ?? 0);
+        $uomId = (int)($_POST['uom'] ?? 0);
 
-        if (empty($sku) || empty($name) || empty($uom) || $cost_price < 0 || $sale_price < 0 || $reorder_level < 0) {
-            setFlashMessage('error', 'SKU, name, UOM, and non-negative prices are required.');
+        if (empty($sku) || empty($name) || $categoryId <= 0 || $uomId <= 0) {
+            setFlashMessage('error', 'SKU, name, product category, and UOM are required.');
             header("Location: index.php" . $role_query);
             exit();
         }
 
-        $uomStmt = mysqli_prepare($conn, 'SELECT id FROM units_of_measure WHERE code = ? LIMIT 1');
-        mysqli_stmt_bind_param($uomStmt, 's', $uom);
+        $uomStmt = mysqli_prepare($conn, 'SELECT id,code FROM units_of_measure WHERE id=? AND (business_id IS NULL OR business_id=?) LIMIT 1');
+        mysqli_stmt_bind_param($uomStmt, 'ii', $uomId, $businessId);
         mysqli_stmt_execute($uomStmt);
         $uomRow = mysqli_fetch_assoc(mysqli_stmt_get_result($uomStmt));
         if (!$uomRow) {
@@ -52,7 +51,15 @@ switch ($action) {
             header("Location: index.php" . $role_query);
             exit();
         }
-        $uomId = (int)$uomRow['id'];
+        $uom = $uomRow['code'];
+        $categoryStmt = mysqli_prepare($conn, 'SELECT id FROM product_categories WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
+        mysqli_stmt_bind_param($categoryStmt, 'ii', $categoryId, $businessId);
+        mysqli_stmt_execute($categoryStmt);
+        if (!mysqli_fetch_assoc(mysqli_stmt_get_result($categoryStmt))) {
+            setFlashMessage('error', 'Select a valid active product category.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
 
         // Validate SKU uniqueness for this business
         $chkQuery = "SELECT id FROM products WHERE business_id = ? AND sku = ? LIMIT 1";
@@ -67,23 +74,22 @@ switch ($action) {
 
         $query = "
             INSERT INTO products (
-                business_id, sku, name, category, uom, uom_id,
-                default_purchase_price, default_selling_price, cost_price, sale_price,
-                reorder_level, is_active, created_at, updated_at
+                business_id, sku, name, category_id, uom, uom_id,
+                is_active, created_at, updated_at
             ) VALUES (
                 ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, 1, NOW(6), NOW(6)
+                1, NOW(6), NOW(6)
             )
         ";
         $stmt = mysqli_prepare($conn, $query);
-        mysqli_stmt_bind_param($stmt, 'issssiddddd', $businessId, $sku, $name, $category, $uom, $uomId, $cost_price, $sale_price, $cost_price, $sale_price, $reorder_level);
+        mysqli_stmt_bind_param($stmt, 'issisi', $businessId, $sku, $name, $categoryId, $uom, $uomId);
         if (mysqli_stmt_execute($stmt)) {
             $productId = mysqli_insert_id($conn);
             writeAuditLog($conn, $businessId, 'PRODUCT_CREATED', 'product', $productId, [
                 'sku' => $sku,
                 'name' => $name,
-                'cost_price' => $cost_price,
-                'sale_price' => $sale_price
+                'category_id' => $categoryId,
+                'uom_id' => $uomId
             ]);
             setFlashMessage('success', 'Product saved to catalog.');
         } else {
@@ -98,20 +104,17 @@ switch ($action) {
         $productId = isset($_POST['product_id']) ? (int)$_POST['product_id'] : 0;
         $sku = strtoupper(trim($_POST['sku'] ?? ''));
         $name = trim($_POST['name'] ?? '');
-        $category = trim($_POST['category'] ?? NULL);
-        $uom = strtoupper(trim($_POST['uom'] ?? 'UNIT'));
-        $cost_price = (float)($_POST['cost_price'] ?? 0.0);
-        $sale_price = (float)($_POST['sale_price'] ?? 0.0);
-        $reorder_level = (float)($_POST['reorder_level'] ?? 0.0);
+        $categoryId = (int)($_POST['category_id'] ?? 0);
+        $uomId = (int)($_POST['uom'] ?? 0);
 
-        if (empty($productId) || empty($sku) || empty($name) || empty($uom) || $cost_price < 0 || $sale_price < 0 || $reorder_level < 0) {
-            setFlashMessage('error', 'SKU, name, UOM, and non-negative prices are required.');
+        if (empty($productId) || empty($sku) || empty($name) || $categoryId <= 0 || $uomId <= 0) {
+            setFlashMessage('error', 'SKU, name, product category, and UOM are required.');
             header("Location: index.php" . $role_query);
             exit();
         }
 
-        $uomStmt = mysqli_prepare($conn, 'SELECT id FROM units_of_measure WHERE code = ? LIMIT 1');
-        mysqli_stmt_bind_param($uomStmt, 's', $uom);
+        $uomStmt = mysqli_prepare($conn, 'SELECT id,code FROM units_of_measure WHERE id=? AND (business_id IS NULL OR business_id=?) LIMIT 1');
+        mysqli_stmt_bind_param($uomStmt, 'ii', $uomId, $businessId);
         mysqli_stmt_execute($uomStmt);
         $uomRow = mysqli_fetch_assoc(mysqli_stmt_get_result($uomStmt));
         if (!$uomRow) {
@@ -119,7 +122,15 @@ switch ($action) {
             header("Location: index.php" . $role_query);
             exit();
         }
-        $uomId = (int)$uomRow['id'];
+        $uom = $uomRow['code'];
+        $categoryStmt = mysqli_prepare($conn, 'SELECT id FROM product_categories WHERE id=? AND business_id=? LIMIT 1');
+        mysqli_stmt_bind_param($categoryStmt, 'ii', $categoryId, $businessId);
+        mysqli_stmt_execute($categoryStmt);
+        if (!mysqli_fetch_assoc(mysqli_stmt_get_result($categoryStmt))) {
+            setFlashMessage('error', 'Select a valid product category.');
+            header("Location: index.php" . $role_query);
+            exit();
+        }
 
         // Validate SKU uniqueness except current
         $chkQuery = "SELECT id FROM products WHERE business_id = ? AND sku = ? AND id != ? LIMIT 1";
@@ -147,20 +158,17 @@ switch ($action) {
 
         $query = "
             UPDATE products 
-            SET sku = ?, name = ?, category = ?, uom = ?, uom_id = ?,
-                default_purchase_price = ?, default_selling_price = ?,
-                cost_price = ?, sale_price = ?, reorder_level = ?, updated_at = NOW(6)
+            SET sku = ?, name = ?, category_id = ?, uom = ?, uom_id = ?, updated_at = NOW(6)
             WHERE id = ? AND business_id = ?
         ";
         $stmt = mysqli_prepare($conn, $query);
-        mysqli_stmt_bind_param($stmt, 'ssssidddddii', $sku, $name, $category, $uom, $uomId, $cost_price, $sale_price, $cost_price, $sale_price, $reorder_level, $productId, $businessId);
+        mysqli_stmt_bind_param($stmt, 'ssisiii', $sku, $name, $categoryId, $uom, $uomId, $productId, $businessId);
         if (mysqli_stmt_execute($stmt)) {
             writeAuditLog($conn, $businessId, 'PRODUCT_UPDATED', 'product', $productId, [
                 'sku' => $sku,
                 'name' => $name,
-                'cost_price' => $cost_price,
-                'sale_price' => $sale_price,
-                'reorder_level' => $reorder_level
+                'category_id' => $categoryId,
+                'uom_id' => $uomId
             ], $oldRow);
             setFlashMessage('success', 'Product catalog parameters updated.');
         } else {

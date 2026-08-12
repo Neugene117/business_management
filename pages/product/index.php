@@ -1,403 +1,203 @@
 <?php
 $page_title = 'Products Catalog';
 require_once __DIR__ . '/../../includes/header.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 
 $permissions = require __DIR__ . '/permissions.php';
-requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
+$businessId = (int)($_SESSION['active_business_id'] ?? 0);
+$membershipId = (int)($_SESSION['membership_id'] ?? 0);
+requirePermission($conn, $membershipId, $businessId, $permissions['view']);
 
-$businessId = $_SESSION['active_business_id'] ?? 0;
-$canCreateProduct = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['create']);
-$canUpdateProduct = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$category_filter = isset($_GET['category']) ? trim($_GET['category']) : '';
-
-// Server side pagination
-$page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+$canCreateProduct = hasPermission($conn, $membershipId, $businessId, $permissions['create']);
+$canUpdateProduct = hasPermission($conn, $membershipId, $businessId, $permissions['update']);
+$search = trim((string)($_GET['search'] ?? ''));
+$categoryFilter = (int)($_GET['category_id'] ?? 0);
+$page = max(1, (int)($_GET['page'] ?? 1));
 $limit = 20;
 $offset = ($page - 1) * $limit;
 
-$where_clause = " WHERE p.business_id = ?";
+$where = ' WHERE p.business_id=?';
 $params = [$businessId];
 $types = 'i';
-
-if (!empty($search)) {
-    $where_clause .= " AND (p.name LIKE ? OR p.sku LIKE ?)";
-    $search_param = "%$search%";
-    $params[] = $search_param;
-    $params[] = $search_param;
+if ($search !== '') {
+    $where .= ' AND (p.name LIKE ? OR p.sku LIKE ?)';
+    $searchLike = '%' . $search . '%';
+    $params[] = $searchLike;
+    $params[] = $searchLike;
     $types .= 'ss';
 }
-
-if (!empty($category_filter)) {
-    $where_clause .= " AND p.category = ?";
-    $params[] = $category_filter;
-    $types .= 's';
+if ($categoryFilter > 0) {
+    $where .= ' AND p.category_id=?';
+    $params[] = $categoryFilter;
+    $types .= 'i';
 }
 
-// Count total
-$count_query = "SELECT COUNT(*) as total FROM products p $where_clause";
-$cStmt = mysqli_prepare($conn, $count_query);
-mysqli_stmt_bind_param($cStmt, $types, ...$params);
-mysqli_stmt_execute($cStmt);
-$total_rows = mysqli_fetch_assoc(mysqli_stmt_get_result($cStmt))['total'] ?? 0;
-$total_pages = ceil($total_rows / $limit);
+$countStmt = mysqli_prepare($conn, "SELECT COUNT(*) total FROM products p $where");
+mysqli_stmt_bind_param($countStmt, $types, ...$params);
+mysqli_stmt_execute($countStmt);
+$totalRows = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($countStmt))['total'] ?? 0);
+$totalPages = (int)ceil($totalRows / $limit);
 
-// Fetch data including total quantity on hand
-$query = "
-    SELECT p.*, 
-           COALESCE((SELECT SUM(quantity_on_hand) FROM inventory_balances WHERE product_id = p.id AND business_id = p.business_id), 0.0) as total_qty
+$productStmt = mysqli_prepare($conn, "SELECT p.id,p.sku,p.name,p.category_id,p.uom_id,p.uom,p.is_active,pc.name category_name
     FROM products p
-    $where_clause
-    ORDER BY p.name ASC
-    LIMIT ? OFFSET ?
-";
-$stmt = mysqli_prepare($conn, $query);
-$types_limit = $types . 'ii';
-$params_limit = array_merge($params, [$limit, $offset]);
-mysqli_stmt_bind_param($stmt, $types_limit, ...$params_limit);
-mysqli_stmt_execute($stmt);
-$result = mysqli_stmt_get_result($stmt);
+    JOIN product_categories pc ON pc.id=p.category_id AND pc.business_id=p.business_id
+    $where ORDER BY p.name,p.sku LIMIT ? OFFSET ?");
+$listParams = array_merge($params, [$limit, $offset]);
+$listTypes = $types . 'ii';
+mysqli_stmt_bind_param($productStmt, $listTypes, ...$listParams);
+mysqli_stmt_execute($productStmt);
+$products = mysqli_stmt_get_result($productStmt);
 
-// Fetch unique categories for dropdown filters
-$catQuery = "SELECT DISTINCT category FROM products WHERE business_id = ? AND category IS NOT NULL AND category != '' ORDER BY category ASC";
-$catStmt = mysqli_prepare($conn, $catQuery);
-mysqli_stmt_bind_param($catStmt, 'i', $businessId);
-mysqli_stmt_execute($catStmt);
-$catResult = mysqli_stmt_get_result($catStmt);
+$categoryStmt = mysqli_prepare($conn, 'SELECT id,name,is_active FROM product_categories WHERE business_id=? ORDER BY is_active DESC,name');
+mysqli_stmt_bind_param($categoryStmt, 'i', $businessId);
+mysqli_stmt_execute($categoryStmt);
+$categoryOptions = [];
+$categoryResult = mysqli_stmt_get_result($categoryStmt);
+while ($row = mysqli_fetch_assoc($categoryResult)) $categoryOptions[] = $row;
 
-$uomResult = mysqli_query($conn, 'SELECT code, name FROM units_of_measure ORDER BY name');
+$uomStmt = mysqli_prepare($conn, 'SELECT id,business_id,code,name,symbol FROM units_of_measure WHERE business_id IS NULL OR business_id=? ORDER BY business_id IS NULL DESC,name');
+mysqli_stmt_bind_param($uomStmt, 'i', $businessId);
+mysqli_stmt_execute($uomStmt);
 $uomOptions = [];
-while ($uomRow = mysqli_fetch_assoc($uomResult)) {
-    $uomOptions[] = $uomRow;
-}
+$uomResult = mysqli_stmt_get_result($uomStmt);
+while ($row = mysqli_fetch_assoc($uomResult)) $uomOptions[] = $row;
 
-// Fetch business currency
-$bizQuery = "SELECT currency_code FROM businesses WHERE id = ? LIMIT 1";
-$bStmt = mysqli_prepare($conn, $bizQuery);
-mysqli_stmt_bind_param($bStmt, 'i', $businessId);
-mysqli_stmt_execute($bStmt);
-$bizCur = mysqli_fetch_assoc(mysqli_stmt_get_result($bStmt))['currency_code'] ?? 'RWF';
-
+$summaryStmt = mysqli_prepare($conn, 'SELECT COUNT(*) total,SUM(is_active=1) active FROM products WHERE business_id=?');
+mysqli_stmt_bind_param($summaryStmt, 'i', $businessId);
+mysqli_stmt_execute($summaryStmt);
+$summary = mysqli_fetch_assoc(mysqli_stmt_get_result($summaryStmt)) ?: ['total'=>0,'active'=>0];
 $csrfToken = generateCsrfToken();
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$roleQuery = getRolePreviewQuery();
+$queryBase = array_filter([
+    'search' => $search,
+    'category_id' => $categoryFilter ?: null,
+    'role' => getPreviewRole(),
+], static fn($value) => $value !== null && $value !== '');
 ?>
-<div>
-  <!-- Left Column: Products List -->
-  <div class="card">
-    <div class="card-header" style="flex-wrap: wrap; gap: 12px; display: flex; justify-content: space-between; align-items: center;">
-      <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-        <div class="card-title">Item Catalog Directory</div>
-        <?php if ($canCreateProduct): ?>
-          <button class="btn-primary" onclick="openAddModal()">+ Add Product</button>
-        <?php endif; ?>
-      </div>
-      <form method="GET" action="index.php" style="display: flex; gap: 8px; align-items: center;">
-        <?php if (isset($_GET['role'])): ?>
-          <input type="hidden" name="role" value="<?php echo e($_GET['role']); ?>">
-        <?php endif; ?>
-        <select name="category" style="padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--text); font-size:12px;">
-          <option value="">All Categories</option>
-          <?php while ($cRow = mysqli_fetch_assoc($catResult)): ?>
-            <option value="<?php echo e($cRow['category']); ?>" <?php echo ($category_filter === $cRow['category']) ? 'selected' : ''; ?>><?php echo e($cRow['category']); ?></option>
-          <?php endwhile; ?>
-        </select>
-        <input type="text" name="search" placeholder="Search SKU/name..." value="<?php echo e($search); ?>" style="padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--text); font-size:12px; min-width: 150px;">
-        <button class="btn-sm" type="submit">Filter</button>
-      </form>
-    </div>
-    
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>SKU</th>
-          <th>Product Name</th>
-          <th>Category</th>
-          <th>Cost / Sale</th>
-          <th>Stock Balance</th>
-          <th>UOM</th>
-          <th>Status</th>
-          <th style="text-align: right;">Action</th>
-        </tr>
-      </thead>
+
+<div class="products-page-head">
+  <div>
+    <h1>Products</h1>
+    <p>Register and organize the core information that identifies each product.</p>
+  </div>
+  <div class="products-head-actions">
+    <a class="btn-sm" href="../product_category/index.php<?php echo e($roleQuery); ?>">Product Categories</a>
+    <a class="btn-sm" href="../unit/index.php<?php echo e($roleQuery); ?>">Units of Measure</a>
+    <?php if ($canCreateProduct): ?><button type="button" class="btn-primary" onclick="openProductModal()">+ Register Product</button><?php endif; ?>
+  </div>
+</div>
+
+<div class="product-summary">
+  <div class="card"><span>Registered Products</span><strong><?php echo (int)$summary['total']; ?></strong></div>
+  <div class="card"><span>Active Products</span><strong><?php echo (int)$summary['active']; ?></strong></div>
+  <div class="card"><span>Product Categories</span><strong><?php echo count($categoryOptions); ?></strong></div>
+</div>
+
+<section class="card products-card">
+  <div class="products-toolbar">
+    <div><div class="card-title">Product Directory</div><p>Only product details registered in the catalog are shown below.</p></div>
+    <form method="GET" action="index.php" class="product-filter">
+      <?php if (getPreviewRole()): ?><input type="hidden" name="role" value="<?php echo e(getPreviewRole()); ?>"><?php endif; ?>
+      <select name="category_id" aria-label="Filter by product category">
+        <option value="">All categories</option>
+        <?php foreach ($categoryOptions as $category): ?>
+          <option value="<?php echo (int)$category['id']; ?>" <?php echo $categoryFilter === (int)$category['id'] ? 'selected' : ''; ?>><?php echo e($category['name']); ?><?php echo (int)$category['is_active'] === 0 ? ' (Inactive)' : ''; ?></option>
+        <?php endforeach; ?>
+      </select>
+      <input name="search" value="<?php echo e($search); ?>" placeholder="Search by SKU or product name">
+      <button class="btn-sm" type="submit">Filter</button>
+      <?php if ($search !== '' || $categoryFilter > 0): ?><a class="btn-sm clear-filter" href="index.php<?php echo e($roleQuery); ?>">Clear</a><?php endif; ?>
+    </form>
+  </div>
+
+  <div class="product-table-wrap">
+    <table class="data-table product-table">
+      <thead><tr><th>SKU</th><th>Product Name</th><th>Category</th><th>Unit of Measure</th><th>Status</th><th class="action-column">Actions</th></tr></thead>
       <tbody>
-        <?php if (mysqli_num_rows($result) === 0): ?>
+        <?php if (mysqli_num_rows($products) === 0): ?>
+          <tr><td colspan="6" class="product-empty">No products match the selected filters.</td></tr>
+        <?php else: while ($product = mysqli_fetch_assoc($products)): ?>
           <tr>
-            <td colspan="8" style="text-align: center; color: var(--text3); padding: 30px;">
-              No products registered in catalog.
+            <td><span class="code-badge"><?php echo e($product['sku']); ?></span></td>
+            <td class="td-name"><?php echo e($product['name']); ?></td>
+            <td><?php echo e($product['category_name']); ?></td>
+            <td><span class="uom-badge"><?php echo e($product['uom']); ?></span></td>
+            <td><span class="status-pill <?php echo (int)$product['is_active'] === 1 ? 'pill-green' : 'pill-red'; ?>"><?php echo (int)$product['is_active'] === 1 ? 'Active' : 'Inactive'; ?></span></td>
+            <td class="action-column">
+              <?php if ($canUpdateProduct): ?>
+                <button type="button" class="btn-sm" data-product="<?php echo e(json_encode($product)); ?>" onclick="openProductModal(JSON.parse(this.dataset.product))">Edit</button>
+                <form action="backend.php<?php echo e($roleQuery); ?>" method="POST" class="inline-form" onsubmit="return confirm('Change the status of this product?');">
+                  <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
+                  <input type="hidden" name="action" value="toggle_status">
+                  <input type="hidden" name="product_id" value="<?php echo (int)$product['id']; ?>">
+                  <button type="submit" class="btn-sm status-button"><?php echo (int)$product['is_active'] === 1 ? 'Deactivate' : 'Activate'; ?></button>
+                </form>
+              <?php else: ?><span class="muted-action">View only</span><?php endif; ?>
             </td>
           </tr>
-        <?php else: ?>
-          <?php while ($row = mysqli_fetch_assoc($result)): 
-              $is_low = ($row['total_qty'] <= $row['reorder_level']);
-          ?>
-            <tr>
-              <td><span class="code-badge"><?php echo e($row['sku']); ?></span></td>
-              <td class="td-name"><?php echo e($row['name']); ?></td>
-              <td><span style="font-size:11.5px; color:var(--text3);"><?php echo e($row['category'] ?? 'General'); ?></span></td>
-              <td>
-                <div style="font-size: 11px; color:var(--text3)">Cost: <?php echo formatCurrency($row['cost_price'], $bizCur); ?></div>
-                <div style="font-weight: 600; color:var(--blue);">Sale: <?php echo formatCurrency($row['sale_price'], $bizCur); ?></div>
-              </td>
-              <td>
-                <span style="font-weight: 700; color: <?php echo $is_low ? 'var(--red)' : 'var(--text)'; ?>;">
-                  <?php echo (float)$row['total_qty']; ?>
-                </span>
-                <?php if ($is_low): ?>
-                  <span class="status-pill pill-red" style="font-size: 8px; padding: 1px 4px; margin-left: 4px;" title="Reorder level: <?php echo (float)$row['reorder_level']; ?>">Low Stock</span>
-                <?php endif; ?>
-              </td>
-              <td><span class="code-badge" style="background:var(--bg); border:1px solid var(--border);"><?php echo e($row['uom']); ?></span></td>
-              <td>
-                <?php if ($row['is_active']): ?>
-                  <span class="status-pill pill-green">Active</span>
-                <?php else: ?>
-                  <span class="status-pill pill-red">Inactive</span>
-                <?php endif; ?>
-              </td>
-              <td style="text-align: right;">
-                <div style="display:inline-flex; gap: 4px;">
-                  <?php if ($canUpdateProduct): ?>
-                  <button class="btn-sm" onclick="showEdit(<?php echo htmlspecialchars(json_encode($row)); ?>)">Edit</button>
-                  <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:inline;" onsubmit="return confirm('Toggle status of this catalog item?');">
-                    <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
-                    <input type="hidden" name="action" value="toggle_status">
-                    <input type="hidden" name="product_id" value="<?php echo (int)$row['id']; ?>">
-                    <button type="submit" class="btn-sm" style="background: var(--bg); border: 1px solid var(--border); color: var(--text);">Toggle</button>
-                  </form>
-                  <?php endif; ?>
-                </div>
-              </td>
-            </tr>
-          <?php endwhile; ?>
-        <?php endif; ?>
+        <?php endwhile; endif; ?>
       </tbody>
     </table>
-
-    <!-- Pagination links -->
-    <?php if ($total_pages > 1): ?>
-      <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px; border-top: 1px solid var(--table-border);">
-        <span style="font-size:12px; color: var(--text3);">Showing page <?php echo $page; ?> of <?php echo $total_pages; ?> (<?php echo $total_rows; ?> entries)</span>
-        <div style="display: flex; gap: 4px;">
-          <?php if ($page > 1): ?>
-            <a class="btn-sm" style="text-decoration:none;" href="index.php?page=<?php echo ($page - 1); ?>&category=<?php echo e($category_filter); ?>&search=<?php echo e($search); ?><?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>">Previous</a>
-          <?php endif; ?>
-          <?php for ($i = 1; $i <= $total_pages; $i++): ?>
-            <a class="btn-sm <?php echo ($i === $page) ? 'active' : ''; ?>" style="text-decoration:none;" href="index.php?page=<?php echo $i; ?>&category=<?php echo e($category_filter); ?>&search=<?php echo e($search); ?><?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>"><?php echo $i; ?></a>
-          <?php endfor; ?>
-          <?php if ($page < $total_pages): ?>
-            <a class="btn-sm" style="text-decoration:none;" href="index.php?page=<?php echo ($page + 1); ?>&category=<?php echo e($category_filter); ?>&search=<?php echo e($search); ?><?php echo isset($_GET['role']) ? '&role='.e($_GET['role']) : ''; ?>">Next</a>
-          <?php endif; ?>
-        </div>
-      </div>
-    <?php endif; ?>
   </div>
-</div>
 
-<!-- ==========================================
-     MODAL: ADD PRODUCT
-     ========================================== -->
-<!-- ==========================================
-     MODAL: ADD PRODUCT
-     ========================================== -->
-<?php if ($canCreateProduct): ?>
-<div class="modal-overlay" id="addModalOverlay">
-  <div class="modal-content-card modal-sm">
+  <?php if ($totalPages > 1): ?>
+    <div class="product-pagination"><span>Page <?php echo $page; ?> of <?php echo $totalPages; ?> &middot; <?php echo $totalRows; ?> products</span><div>
+      <?php if ($page > 1): ?><a class="btn-sm" href="?<?php echo e(http_build_query(array_merge($queryBase, ['page'=>$page-1]))); ?>">Previous</a><?php endif; ?>
+      <?php if ($page < $totalPages): ?><a class="btn-sm" href="?<?php echo e(http_build_query(array_merge($queryBase, ['page'=>$page+1]))); ?>">Next</a><?php endif; ?>
+    </div></div>
+  <?php endif; ?>
+</section>
+
+<?php if ($canCreateProduct || $canUpdateProduct): ?>
+<div class="modal-overlay" id="productModal" aria-hidden="true">
+  <div class="modal-content-card product-modal-card" role="dialog" aria-modal="true" aria-labelledby="productModalTitle">
     <div class="modal-header">
-      <div class="modal-title">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-        Add Catalog Product
-      </div>
-      <button type="button" class="modal-close-btn" onclick="closeAddModal()">✕</button>
+      <div><div class="modal-title" id="productModalTitle">Register Product</div><p id="productModalSubtitle">Enter the product's catalog information.</p></div>
+      <button type="button" class="modal-close-btn" onclick="closeProductModal()" aria-label="Close">&times;</button>
     </div>
-    <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:flex; flex-direction:column; flex:1;" id="addProdForm">
-      <div class="modal-body">
+    <form action="backend.php<?php echo e($roleQuery); ?>" method="POST" id="productForm">
+      <div class="modal-body product-form-grid">
         <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
-        <input type="hidden" name="action" value="create">
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="p_sku">SKU Code <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="text" name="sku" id="p_sku" placeholder="e.g. GLD-24K-10G" required>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="p_name">Product Name <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="text" name="name" id="p_name" placeholder="e.g. 24K Gold Bar (10g)" required>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="p_cat">Category</label>
-          <div class="field-wrap">
-            <input type="text" name="category" id="p_cat" placeholder="e.g. Minerals, Machinery">
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="p_uom">Unit of Measure (UOM) <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <select name="uom" id="p_uom" required>
-              <?php foreach ($uomOptions as $uomOption): ?><option value="<?php echo e($uomOption['code']); ?>" <?php echo $uomOption['code'] === 'UNIT' ? 'selected' : ''; ?>><?php echo e($uomOption['name']); ?> (<?php echo e($uomOption['code']); ?>)</option><?php endforeach; ?>
-            </select>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="p_cost">Cost Price (<?php echo e($bizCur); ?>) <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="number" name="cost_price" id="p_cost" step="0.0001" min="0" placeholder="0.0000" required>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="p_sale">Sale Price (<?php echo e($bizCur); ?>) <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="number" name="sale_price" id="p_sale" step="0.0001" min="0" placeholder="0.0000" required>
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="p_reorder">Reorder Threshold Quantity <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="number" name="reorder_level" id="p_reorder" step="0.0001" min="0" value="5.0000" required>
-          </div>
-        </div>
+        <input type="hidden" name="action" id="product_action" value="create">
+        <input type="hidden" name="product_id" id="product_id">
+        <label>SKU Code <span>*</span><input name="sku" id="product_sku" maxlength="100" placeholder="e.g. WATER-500" required></label>
+        <label>Product Name <span>*</span><input name="name" id="product_name" maxlength="200" placeholder="e.g. Mineral Water 500ml" required></label>
+        <label>Product Category <span>*</span><select name="category_id" id="product_category" required><option value="">Choose a category</option><?php foreach ($categoryOptions as $category): if ((int)$category['is_active'] !== 1) continue; ?><option value="<?php echo (int)$category['id']; ?>"><?php echo e($category['name']); ?></option><?php endforeach; ?></select><small><a href="../product_category/index.php<?php echo e($roleQuery); ?>">Manage categories</a></small></label>
+        <label>Unit of Measure <span>*</span><select name="uom" id="product_uom" required><option value="">Choose a unit</option><?php foreach ($uomOptions as $unit): ?><option value="<?php echo (int)$unit['id']; ?>"><?php echo e($unit['name']); ?> (<?php echo e($unit['code']); ?>)</option><?php endforeach; ?></select><small><a href="../unit/index.php<?php echo e($roleQuery); ?>">Manage units of measure</a></small></label>
       </div>
-      <div class="modal-footer">
-        <button type="button" class="btn-sm" onclick="closeAddModal()">Cancel</button>
-        <button type="submit" class="btn-primary" id="addBtn">Save Catalog Product</button>
-      </div>
+      <div class="modal-footer"><button type="button" class="btn-sm" onclick="closeProductModal()">Cancel</button><button type="submit" class="btn-primary" id="productSubmit">Save Product</button></div>
     </form>
   </div>
 </div>
 <?php endif; ?>
 
-<!-- ==========================================
-     MODAL: EDIT PRODUCT
-     ========================================== -->
-<?php if ($canUpdateProduct): ?>
-<div class="modal-overlay" id="editModalOverlay">
-  <div class="modal-content-card modal-sm">
-    <div class="modal-header">
-      <div class="modal-title">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-        Modify Product Catalog Parameters
-      </div>
-      <button type="button" class="modal-close-btn" onclick="closeEdit()">✕</button>
-    </div>
-    <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:flex; flex-direction:column; flex:1;" id="editProdForm">
-      <div class="modal-body">
-        <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
-        <input type="hidden" name="action" value="update">
-        <input type="hidden" name="product_id" id="edit_prod_id" value="">
-        
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="edit_sku">SKU Code <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="text" name="sku" id="edit_sku" required>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="edit_name">Product Name <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="text" name="name" id="edit_name" required>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="edit_cat">Category</label>
-          <div class="field-wrap">
-            <input type="text" name="category" id="edit_cat">
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="edit_uom">Unit of Measure (UOM) <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <select name="uom" id="edit_uom" required>
-              <?php foreach ($uomOptions as $uomOption): ?><option value="<?php echo e($uomOption['code']); ?>"><?php echo e($uomOption['name']); ?> (<?php echo e($uomOption['code']); ?>)</option><?php endforeach; ?>
-            </select>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="edit_cost">Cost Price (<?php echo e($bizCur); ?>) <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="number" name="cost_price" id="edit_cost" step="0.0001" min="0" required>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom: 12px;">
-          <label for="edit_sale">Sale Price (<?php echo e($bizCur); ?>) <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="number" name="sale_price" id="edit_sale" step="0.0001" min="0" required>
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="edit_reorder">Reorder Threshold Quantity <span style="color:var(--red);">*</span></label>
-          <div class="field-wrap">
-            <input type="number" name="reorder_level" id="edit_reorder" step="0.0001" min="0" required>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn-sm" onclick="closeEdit()">Cancel</button>
-        <button type="submit" class="btn-primary" id="updateBtn">Update Product</button>
-      </div>
-    </form>
-  </div>
-</div>
-<?php endif; ?>
+<style>
+.products-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:16px}.products-page-head h1{margin:0;color:var(--text);font-size:22px}.products-page-head p,.products-toolbar p,.modal-header p{margin:5px 0 0;color:var(--text3);font-size:11px}.products-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.products-head-actions a{text-decoration:none}.product-summary{display:grid;grid-template-columns:repeat(3,minmax(150px,210px));gap:10px;margin-bottom:14px}.product-summary .card{padding:14px 16px;box-shadow:none}.product-summary span{display:block;color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:.04em}.product-summary strong{display:block;margin-top:7px;color:var(--text);font-size:19px}.products-card{overflow:hidden;box-shadow:none}.products-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:16px;border-bottom:1px solid var(--table-border)}.product-filter{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.product-filter select,.product-filter input{min-height:35px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font:inherit;font-size:11px}.product-filter input{min-width:220px}.clear-filter{text-decoration:none}.product-table-wrap{overflow-x:auto}.product-table{min-width:760px}.product-table td{vertical-align:middle}.uom-badge{display:inline-flex;padding:5px 8px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--text2);font-size:9px;font-weight:650}.action-column{text-align:right!important;white-space:nowrap}.inline-form{display:inline}.status-button{margin-left:4px;background:var(--bg)!important}.muted-action{color:var(--text3);font-size:9px}.product-empty{text-align:center!important;color:var(--text3)!important;padding:36px!important}.product-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 16px;border-top:1px solid var(--table-border);color:var(--text3);font-size:10px}.product-pagination>div{display:flex;gap:6px}.product-pagination a{text-decoration:none}.product-modal-card{width:min(640px,calc(100vw - 28px))}.product-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.product-form-grid>input[type=hidden]{display:none}.product-form-grid label{display:flex;flex-direction:column;gap:6px;color:var(--text2);font-size:10px;font-weight:650}.product-form-grid label>span{color:var(--red)}.product-form-grid input,.product-form-grid select{width:100%;min-height:40px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font:inherit;outline:none}.product-form-grid input:focus,.product-form-grid select:focus{border-color:var(--border-hover)}.product-form-grid small{font-size:9px;font-weight:400}.product-form-grid small a{color:var(--blue);text-decoration:none}@media(max-width:850px){.products-page-head,.products-toolbar{align-items:stretch;flex-direction:column}.products-head-actions,.product-filter{justify-content:flex-start}.product-summary{grid-template-columns:repeat(3,1fr)}}@media(max-width:580px){.product-summary,.product-form-grid{grid-template-columns:1fr}.product-filter{display:grid;grid-template-columns:1fr 1fr}.product-filter input{min-width:0;grid-column:1/-1}.products-head-actions{align-items:stretch;flex-direction:column}.product-pagination{align-items:flex-start;flex-direction:column}}
+</style>
 
 <script>
-function openAddModal() {
-  document.getElementById('addModalOverlay').style.display = 'flex';
+const productModal = document.getElementById('productModal');
+function openProductModal(product = null) {
+  if (!productModal) return;
+  document.getElementById('productForm').reset();
+  document.getElementById('product_action').value = product ? 'update' : 'create';
+  document.getElementById('product_id').value = product ? product.id : '';
+  document.getElementById('product_sku').value = product ? product.sku : '';
+  document.getElementById('product_name').value = product ? product.name : '';
+  document.getElementById('product_category').value = product ? product.category_id : '';
+  document.getElementById('product_uom').value = product ? product.uom_id : '';
+  document.getElementById('productModalTitle').textContent = product ? 'Edit Product' : 'Register Product';
+  document.getElementById('productModalSubtitle').textContent = product ? 'Update the registered catalog information.' : 'Enter the product\'s catalog information.';
+  document.getElementById('productSubmit').textContent = product ? 'Save Changes' : 'Save Product';
+  productModal.style.display = 'flex';
+  productModal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => document.getElementById('product_sku').focus(), 0);
 }
-
-function closeAddModal() {
-  document.getElementById('addModalOverlay').style.display = 'none';
-}
-
-function showEdit(prod) {
-  document.getElementById('edit_prod_id').value = prod.id;
-  document.getElementById('edit_sku').value = prod.sku;
-  document.getElementById('edit_name').value = prod.name;
-  document.getElementById('edit_cat').value = prod.category || '';
-  document.getElementById('edit_uom').value = prod.uom;
-  document.getElementById('edit_cost').value = parseFloat(prod.cost_price).toFixed(4);
-  document.getElementById('edit_sale').value = parseFloat(prod.sale_price).toFixed(4);
-  document.getElementById('edit_reorder').value = parseFloat(prod.reorder_level).toFixed(4);
-  
-  document.getElementById('editModalOverlay').style.display = 'flex';
-}
-
-function closeEdit() {
-  document.getElementById('editModalOverlay').style.display = 'none';
-}
-
-// Close modals when clicking outside
-document.getElementById('addModalOverlay')?.addEventListener('click', function(e) {
-  if (e.target === this) closeAddModal();
-});
-document.getElementById('editModalOverlay')?.addEventListener('click', function(e) {
-  if (e.target === this) closeEdit();
-});
-
-// Safeguard double submissions client-side
-document.getElementById('addProdForm')?.addEventListener('submit', function() {
-  document.getElementById('addBtn').disabled = true;
-  document.getElementById('addBtn').style.opacity = '0.7';
-  document.getElementById('addBtn').textContent = 'Saving...';
-});
-document.getElementById('editProdForm')?.addEventListener('submit', function() {
-  document.getElementById('updateBtn').disabled = true;
-  document.getElementById('updateBtn').style.opacity = '0.7';
-  document.getElementById('updateBtn').textContent = 'Updating...';
-});
+function closeProductModal() { if (!productModal) return; productModal.style.display = 'none'; productModal.setAttribute('aria-hidden', 'true'); }
+productModal?.addEventListener('click', event => { if (event.target === productModal) closeProductModal(); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') closeProductModal(); });
+document.getElementById('productForm')?.addEventListener('submit', function () { const button=document.getElementById('productSubmit'); button.disabled=true; button.textContent='Saving...'; });
 </script>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

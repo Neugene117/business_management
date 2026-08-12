@@ -2,5 +2,6 @@ composer.phar
 /vendor/
 *.jpg
 *.png
+*.sql
 *.md
 /storage/reports/

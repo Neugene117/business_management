@@ -1,6 +1,8 @@
 <?php
 $page_title = 'Locations Management';
 require_once __DIR__ . '/../../includes/header.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 
 $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);

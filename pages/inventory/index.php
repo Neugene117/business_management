@@ -1,6 +1,8 @@
 <?php
 $page_title = 'Stock & Costing Management';
 require_once __DIR__ . '/../../includes/header.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
 
@@ -81,9 +83,8 @@ $roleSuffix = getPreviewRole() !== null ? '&role=' . rawurlencode(getPreviewRole
 $balanceQuery = "
  SELECT b.location_id,b.product_id,b.updated_at,p.name product_name,p.sku,p.uom,l.name location_name,l.code location_code,
   COALESCE(SUM(CASE WHEN m.occurred_at<? THEN m.quantity_delta ELSE 0 END),0) opening_stock,
-  COALESCE(SUM(CASE WHEN m.occurred_at>=? AND m.occurred_at<? AND m.movement_type='PURCHASE_RECEIPT' THEN m.quantity_delta ELSE 0 END),0) received_stock,
-  COALESCE(SUM(CASE WHEN m.occurred_at>=? AND m.occurred_at<? AND m.movement_type IN ('STOCKTAKE_LOSS','MANUAL_OUT','CORRECTION_OUT') THEN ABS(m.quantity_delta) ELSE 0 END),0) lost_stock,
-  COALESCE(SUM(CASE WHEN m.occurred_at>=? AND m.occurred_at<? AND m.movement_type IN ('STOCKTAKE_GAIN','MANUAL_IN','CORRECTION_IN') THEN m.quantity_delta ELSE 0 END),0) gained_stock,
+  COALESCE(SUM(CASE WHEN m.occurred_at>=? AND m.occurred_at<? AND m.quantity_delta>0 THEN m.quantity_delta ELSE 0 END),0) received_stock,
+  COALESCE(SUM(CASE WHEN m.occurred_at>=? AND m.occurred_at<? AND m.quantity_delta<0 THEN ABS(m.quantity_delta) ELSE 0 END),0) stock_out,
   COALESCE(SUM(CASE WHEN m.occurred_at<? THEN m.quantity_delta ELSE 0 END),0) closing_stock,
   COALESCE(SUM(CASE WHEN m.occurred_at<? THEN m.quantity_delta*m.unit_cost ELSE 0 END),0) closing_value
  FROM inventory_balances b
@@ -93,14 +94,14 @@ $balanceQuery = "
  WHERE b.business_id=?
  GROUP BY b.location_id,b.product_id,b.updated_at,p.name,p.sku,p.uom,l.name,l.code ORDER BY p.name,l.name";
 $stmt = mysqli_prepare($conn, $balanceQuery);
-mysqli_stmt_bind_param($stmt, 'sssssssssi', $stockPeriodStart,$stockPeriodStart,$stockPeriodEnd,$stockPeriodStart,$stockPeriodEnd,$stockPeriodStart,$stockPeriodEnd,$stockPeriodEnd,$stockPeriodEnd,$businessId);
+mysqli_stmt_bind_param($stmt, 'sssssssi', $stockPeriodStart,$stockPeriodStart,$stockPeriodEnd,$stockPeriodStart,$stockPeriodEnd,$stockPeriodEnd,$stockPeriodEnd,$businessId);
 mysqli_stmt_execute($stmt); $balances = mysqli_stmt_get_result($stmt);
 ?>
 <form class="stock-filter" method="GET"><input type="hidden" name="tab" value="balances"><?php if (getPreviewRole()): ?><input type="hidden" name="role" value="<?php echo e(getPreviewRole()); ?>"><?php endif; ?><label>From<input type="date" name="from" value="<?php echo e($stockFrom); ?>"></label><label>To<input type="date" name="to" value="<?php echo e($stockTo); ?>"></label><button class="btn-primary">Apply period</button></form>
-<section class="card"><div class="card-header"><div><div class="card-title">Stock Movement Summary</div><p class="section-help">Opening is the previous closing balance. Closing includes purchases, sales, returns, gains, losses, damage, expiry, and corrections.</p></div></div>
-<div class="inventory-table-scroll"><table class="data-table stock-summary"><thead><tr><th>SKU Code</th><th>Product Name</th><th>Location</th><th>Opening Stock</th><th>Received</th><th>Lost</th><th>Gain</th><th>Closing Stock</th><th>Average Purchase Price</th><th>Stock Value</th><th>Updated</th></tr></thead><tbody>
-<?php if (mysqli_num_rows($balances) === 0): ?><tr><td colspan="11" class="empty-cell">No inventory balances found.</td></tr><?php else: while ($row = mysqli_fetch_assoc($balances)): $historicalAverage = abs((float)$row['closing_stock']) > .00005 ? (float)$row['closing_value']/(float)$row['closing_stock'] : 0; ?>
-<tr><td><a class="code-badge history-link" href="?tab=product_history&product_id=<?php echo (int)$row['product_id']; ?>&location_id=<?php echo (int)$row['location_id']; ?>&from=<?php echo e($stockFrom); ?>&to=<?php echo e($stockTo); ?><?php echo $roleSuffix; ?>"><?php echo e($row['sku']); ?></a></td><td class="td-name"><a class="history-link" href="?tab=product_history&product_id=<?php echo (int)$row['product_id']; ?>&location_id=<?php echo (int)$row['location_id']; ?>&from=<?php echo e($stockFrom); ?>&to=<?php echo e($stockTo); ?><?php echo $roleSuffix; ?>"><?php echo e($row['product_name']); ?></a></td><td><?php echo e($row['location_code'].' · '.$row['location_name']); ?></td><td><?php echo number_format((float)$row['opening_stock'],4); ?> <?php echo e($row['uom']); ?></td><td class="stock-in">+<?php echo number_format((float)$row['received_stock'],4); ?></td><td class="stock-out">-<?php echo number_format((float)$row['lost_stock'],4); ?></td><td class="stock-in">+<?php echo number_format((float)$row['gained_stock'],4); ?></td><td class="td-bold"><?php echo number_format((float)$row['closing_stock'],4); ?> <?php echo e($row['uom']); ?></td><td><?php echo formatCurrency($historicalAverage,$currency); ?></td><td class="td-bold"><?php echo formatCurrency((float)$row['closing_value'],$currency); ?></td><td><?php echo formatDate($row['updated_at'],$config['timezone']); ?></td></tr>
+<section class="card"><div class="card-header"><div><div class="card-title">Stock Movement Summary</div><p class="section-help">Opening is the previous closing balance. Received includes all stock entering during the period, and Stock Out includes all stock leaving it.</p></div></div>
+<div class="inventory-table-scroll"><table class="data-table stock-summary"><thead><tr><th>SKU Code</th><th>Product Name</th><th>Location</th><th>Opening</th><th>Received</th><th>Stock Out</th><th>Closing</th><th>Average Purchase Price</th><th>Stock Value</th><th>Updated</th></tr></thead><tbody>
+<?php if (mysqli_num_rows($balances) === 0): ?><tr><td colspan="10" class="empty-cell">No inventory balances found.</td></tr><?php else: while ($row = mysqli_fetch_assoc($balances)): $historicalAverage = abs((float)$row['closing_stock']) > .00005 ? (float)$row['closing_value']/(float)$row['closing_stock'] : 0; ?>
+<tr><td><a class="code-badge history-link" href="?tab=product_history&product_id=<?php echo (int)$row['product_id']; ?>&location_id=<?php echo (int)$row['location_id']; ?>&from=<?php echo e($stockFrom); ?>&to=<?php echo e($stockTo); ?><?php echo $roleSuffix; ?>"><?php echo e($row['sku']); ?></a></td><td class="td-name"><a class="history-link" href="?tab=product_history&product_id=<?php echo (int)$row['product_id']; ?>&location_id=<?php echo (int)$row['location_id']; ?>&from=<?php echo e($stockFrom); ?>&to=<?php echo e($stockTo); ?><?php echo $roleSuffix; ?>"><?php echo e($row['product_name']); ?></a></td><td><?php echo e($row['location_code'].' · '.$row['location_name']); ?></td><td><?php echo number_format((float)$row['opening_stock'],4); ?> <?php echo e($row['uom']); ?></td><td class="stock-in">+<?php echo number_format((float)$row['received_stock'],4); ?></td><td class="stock-out">-<?php echo number_format((float)$row['stock_out'],4); ?></td><td class="td-bold"><?php echo number_format((float)$row['closing_stock'],4); ?> <?php echo e($row['uom']); ?></td><td><?php echo formatCurrency($historicalAverage,$currency); ?></td><td class="td-bold"><?php echo formatCurrency((float)$row['closing_value'],$currency); ?></td><td><?php echo formatDate($row['updated_at'],$config['timezone']); ?></td></tr>
 <?php endwhile; endif; ?></tbody></table></div></section>
 
 <?php elseif ($activeTab === 'movements'): ?>

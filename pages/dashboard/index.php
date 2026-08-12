@@ -2,6 +2,8 @@
 $page_title = 'Dashboard';
 $extra_css = ['dashboard.css'];
 require_once __DIR__ . '/../../includes/header.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 
 $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
@@ -35,12 +37,7 @@ $canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit
   </div>
   
   <div style="display: flex; gap: 10px;">
-    <select id="dateRange" style="padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--text); font-size:12px;">
-      <option value="today">Today</option>
-      <option value="week">This Week</option>
-      <option value="month" selected>This Month</option>
-      <option value="year">This Year</option>
-    </select>
+    <span class="status-pill pill-green">Live database data</span>
   </div>
 </div>
 
@@ -177,11 +174,63 @@ $canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit
   $totalStock = mysqli_fetch_assoc(mysqli_stmt_get_result($stkStmt))['total'] ?? 0;
 
   // Fetch currency code from settings
-  $bizCurQuery = "SELECT currency_code FROM businesses WHERE id = ? LIMIT 1";
+  $bizCurQuery = "SELECT currency_code,timezone FROM businesses WHERE id = ? LIMIT 1";
   $bcStmt = mysqli_prepare($conn, $bizCurQuery);
   mysqli_stmt_bind_param($bcStmt, 'i', $businessId);
   mysqli_stmt_execute($bcStmt);
-  $bizCur = mysqli_fetch_assoc(mysqli_stmt_get_result($bcStmt))['currency_code'] ?? 'RWF';
+  $businessSettings = mysqli_fetch_assoc(mysqli_stmt_get_result($bcStmt)) ?: [];
+  $bizCur = $businessSettings['currency_code'] ?? 'RWF';
+  try { $dashboardTimezone = new DateTimeZone($businessSettings['timezone'] ?? 'UTC'); }
+  catch (Throwable $error) { $dashboardTimezone = new DateTimeZone('UTC'); }
+
+  // Use the recorded cost on completed sale lines instead of a percentage estimate.
+  $returnedQtySql = "COALESCE((SELECT SUM(sri.quantity) FROM sale_return_items sri JOIN sale_returns sr ON sr.id=sri.sale_return_id WHERE sri.sale_item_id=si.id AND sr.status='COMPLETED'),0)";
+  $cogsStmt = mysqli_prepare($conn, "SELECT COALESCE(SUM((si.quantity-$returnedQtySql)*si.unit_cost_at_sale),0) total FROM sale_items si JOIN sales s ON s.id=si.sale_id AND s.business_id=si.business_id WHERE si.business_id=? AND s.status='COMPLETED'");
+  mysqli_stmt_bind_param($cogsStmt, 'i', $businessId);
+  mysqli_stmt_execute($cogsStmt);
+  $actualCOGS = (float)(mysqli_fetch_assoc(mysqli_stmt_get_result($cogsStmt))['total'] ?? 0);
+
+  // Build a live six-month series in the company's timezone.
+  $chartCurrentMonth = (new DateTimeImmutable('now', $dashboardTimezone))->modify('first day of this month')->setTime(0, 0);
+  $chartFirstMonth = $chartCurrentMonth->modify('-5 months');
+  $chartAfterLastMonth = $chartCurrentMonth->modify('+1 month');
+  $chartMonths = [];
+  for ($monthIndex = 0; $monthIndex < 6; $monthIndex++) {
+      $month = $chartFirstMonth->modify('+' . $monthIndex . ' months');
+      $chartMonths[$month->format('Y-m')] = ['label'=>$month->format('M'),'sales'=>0.0,'purchases'=>0.0];
+  }
+  $chartStartUtc = $chartFirstMonth->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+  $chartEndUtc = $chartAfterLastMonth->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+  $salesTrendStmt = mysqli_prepare($conn, "SELECT sold_at activity_at,total_amount FROM sales WHERE business_id=? AND status='COMPLETED' AND sold_at>=? AND sold_at<?");
+  mysqli_stmt_bind_param($salesTrendStmt, 'iss', $businessId, $chartStartUtc, $chartEndUtc);
+  mysqli_stmt_execute($salesTrendStmt);
+  $salesTrendResult = mysqli_stmt_get_result($salesTrendStmt);
+  while ($trendRow = mysqli_fetch_assoc($salesTrendResult)) {
+      $monthKey = (new DateTimeImmutable($trendRow['activity_at'], new DateTimeZone('UTC')))->setTimezone($dashboardTimezone)->format('Y-m');
+      if (isset($chartMonths[$monthKey])) $chartMonths[$monthKey]['sales'] += (float)$trendRow['total_amount'];
+  }
+  $purchaseTrendStmt = mysqli_prepare($conn, "SELECT COALESCE(received_at,purchase_date) activity_at,total_amount FROM purchases WHERE business_id=? AND status='RECEIVED' AND COALESCE(received_at,purchase_date)>=? AND COALESCE(received_at,purchase_date)<?");
+  mysqli_stmt_bind_param($purchaseTrendStmt, 'iss', $businessId, $chartStartUtc, $chartEndUtc);
+  mysqli_stmt_execute($purchaseTrendStmt);
+  $purchaseTrendResult = mysqli_stmt_get_result($purchaseTrendStmt);
+  while ($trendRow = mysqli_fetch_assoc($purchaseTrendResult)) {
+      $monthKey = (new DateTimeImmutable($trendRow['activity_at'], new DateTimeZone('UTC')))->setTimezone($dashboardTimezone)->format('Y-m');
+      if (isset($chartMonths[$monthKey])) $chartMonths[$monthKey]['purchases'] += (float)$trendRow['total_amount'];
+  }
+  $chartMaxValue = 0.0;
+  foreach ($chartMonths as $chartMonth) $chartMaxValue = max($chartMaxValue, $chartMonth['sales'], $chartMonth['purchases']);
+  $chartTick = $chartMaxValue > 0 ? max(1, ceil($chartMaxValue / 4)) : 1;
+  $chartAxisMax = $chartTick * 4;
+  $compactChartNumber = static function (float $value): string {
+      if ($value >= 1000000000) return rtrim(rtrim(number_format($value / 1000000000, 1, '.', ''), '0'), '.') . 'B';
+      if ($value >= 1000000) return rtrim(rtrim(number_format($value / 1000000, 1, '.', ''), '0'), '.') . 'M';
+      if ($value >= 1000) return rtrim(rtrim(number_format($value / 1000, 1, '.', ''), '0'), '.') . 'K';
+      return number_format($value, 0);
+  };
+  $currentMonthTrend = end($chartMonths);
+  $currentMonthSales = (float)$currentMonthTrend['sales'];
+  $currentMonthPurchases = (float)$currentMonthTrend['purchases'];
+  $currentMonthDifference = $currentMonthSales - $currentMonthPurchases;
   ?>
 
   <!-- 8 summary cards -->
@@ -232,10 +281,7 @@ $canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit
 
     <!-- Profit / Loss / Stock counts -->
     <?php
-    // Basic Net Profit estimation = Sales Revenue - Cost of Goods Sold - Expenses
-    // For demo purposes: Net = Sales - (Sales * 0.6) - Expenses
-    $estimatedCOGS = $totalSales * 0.65;
-    $netProfit = $totalSales - $estimatedCOGS - $totalExpenses;
+    $netProfit = $totalSales - $actualCOGS - $totalExpenses;
     $lossVal = ($netProfit < 0) ? abs($netProfit) : 0;
     $profitVal = ($netProfit > 0) ? $netProfit : 0;
     ?>
@@ -247,7 +293,7 @@ $canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit
         <span class="stat-trend trend-up">Profit</span>
       </div>
       <div class="stat-val"><?php echo formatCurrency($profitVal, $bizCur); ?></div>
-      <div class="stat-card-desc">Estimated net profit</div>
+      <div class="stat-card-desc">Net profit from recorded costs</div>
     </div>
     
     <div class="stat-card" id="stat-loss">
@@ -258,7 +304,7 @@ $canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit
         <span class="stat-trend trend-down">Loss</span>
       </div>
       <div class="stat-val"><?php echo formatCurrency($lossVal, $bizCur); ?></div>
-      <div class="stat-card-desc">Estimated loss</div>
+      <div class="stat-card-desc">Net loss from recorded costs</div>
     </div>
     
     <div class="stat-card" id="stat-stock">
@@ -273,27 +319,20 @@ $canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit
     </div>
 
     <?php
-    // Check low stock products count
-    $lowStockQuery = "
-        SELECT COUNT(*) as low_count 
-        FROM inventory_balances ib
-        JOIN products p ON ib.product_id = p.id
-        WHERE ib.business_id = ? AND ib.quantity_on_hand <= p.reorder_level
-    ";
-    $lsStmt = mysqli_prepare($conn, $lowStockQuery);
-    mysqli_stmt_bind_param($lsStmt, 'i', $businessId);
-    mysqli_stmt_execute($lsStmt);
-    $lowCount = mysqli_fetch_assoc(mysqli_stmt_get_result($lsStmt))['low_count'] ?? 0;
+    $productCountStmt = mysqli_prepare($conn, 'SELECT COUNT(*) total FROM products WHERE business_id=? AND is_active=1');
+    mysqli_stmt_bind_param($productCountStmt, 'i', $businessId);
+    mysqli_stmt_execute($productCountStmt);
+    $activeProductCount = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($productCountStmt))['total'] ?? 0);
     ?>
-    <div class="stat-card" id="stat-low-stock">
+    <div class="stat-card" id="stat-products">
       <div class="stat-top">
         <div class="stat-icon" style="background:var(--amber-bg)">
-          <svg viewBox="0 0 24 24" style="stroke:var(--amber)"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <svg viewBox="0 0 24 24" style="stroke:var(--amber)"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
         </div>
-        <span class="stat-trend trend-warn">Low Stock Alerts</span>
+        <span class="stat-trend trend-warn">Products</span>
       </div>
-      <div class="stat-val"><?php echo (int)$lowCount; ?> Items</div>
-      <div class="stat-card-desc">Reorder threshold hit</div>
+      <div class="stat-val"><?php echo $activeProductCount; ?> Items</div>
+      <div class="stat-card-desc">Active registered products</div>
     </div>
   </div>
 
@@ -301,7 +340,7 @@ $canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit
     <!-- Visual Comparison Chart -->
     <div class="card" id="sales-trends">
       <div class="card-header">
-        <div class="card-title">Sales &amp; Purchases Trends</div>
+        <div class="card-title">Sales &amp; Purchases Trends — Last 6 Months</div>
         <div style="display: flex; gap: 12px; font-size: 11px;">
           <span style="display: flex; align-items: center; gap: 4px;"><span style="width:8px; height:8px; background:var(--blue); border-radius:50%;"></span> Sales</span>
           <span style="display: flex; align-items: center; gap: 4px;"><span style="width:8px; height:8px; background:var(--orange); border-radius:50%;"></span> Purchases</span>
@@ -310,53 +349,34 @@ $canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit
       
       <div style="display: flex; justify-content: space-between; font-size: 11.5px; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 16px;">
         <div>
-          <div style="color: var(--text3);">Sales (Month)</div>
-          <div style="font-size: 16px; font-weight:600; color: var(--blue);"><?php echo formatCurrency($totalSales, $bizCur); ?></div>
+          <div style="color: var(--text3);">Sales (Current Month)</div>
+          <div style="font-size: 16px; font-weight:600; color: var(--blue);"><?php echo formatCurrency($currentMonthSales, $bizCur); ?></div>
         </div>
         <div>
-          <div style="color: var(--text3);">Purchases (Month)</div>
-          <div style="font-size: 16px; font-weight:600; color: var(--orange);"><?php echo formatCurrency($totalPurch, $bizCur); ?></div>
+          <div style="color: var(--text3);">Purchases (Current Month)</div>
+          <div style="font-size: 16px; font-weight:600; color: var(--orange);"><?php echo formatCurrency($currentMonthPurchases, $bizCur); ?></div>
         </div>
         <div>
           <div style="color: var(--text3);">Difference</div>
-          <div style="font-size: 16px; font-weight:600; color: var(--green);">+<?php echo formatCurrency(max(0, $totalSales - $totalPurch), $bizCur); ?></div>
+          <div style="font-size: 16px; font-weight:600; color: <?php echo $currentMonthDifference >= 0 ? 'var(--green)' : 'var(--red)'; ?>;"><?php echo ($currentMonthDifference >= 0 ? '+' : '-') . formatCurrency(abs($currentMonthDifference), $bizCur); ?></div>
         </div>
       </div>
 
       <div class="chart-container">
-        <!-- SVG bar chart visualization -->
-        <svg viewBox="0 0 600 240" class="bm-svg-chart">
-          <line x1="50" y1="30" x2="570" y2="30" stroke="var(--border)" stroke-dasharray="4" />
-          <line x1="50" y1="80" x2="570" y2="80" stroke="var(--border)" stroke-dasharray="4" />
-          <line x1="50" y1="130" x2="570" y2="130" stroke="var(--border)" stroke-dasharray="4" />
-          <line x1="50" y1="180" x2="570" y2="180" stroke="var(--border)" stroke-dasharray="4" />
-          <line x1="50" y1="210" x2="570" y2="210" stroke="var(--border)" />
-          
-          <rect x="90" y="120" width="14" height="90" rx="2" fill="var(--blue)" />
-          <rect x="106" y="150" width="14" height="60" rx="2" fill="var(--orange)" />
-          <rect x="170" y="90" width="14" height="120" rx="2" fill="var(--blue)" />
-          <rect x="186" y="130" width="14" height="80" rx="2" fill="var(--orange)" />
-          <rect x="250" y="70" width="14" height="140" rx="2" fill="var(--blue)" />
-          <rect x="266" y="120" width="14" height="90" rx="2" fill="var(--orange)" />
-          <rect x="330" y="95" width="14" height="115" rx="2" fill="var(--blue)" />
-          <rect x="346" y="140" width="14" height="70" rx="2" fill="var(--orange)" />
-          <rect x="410" y="60" width="14" height="150" rx="2" fill="var(--blue)" />
-          <rect x="426" y="100" width="14" height="110" rx="2" fill="var(--orange)" />
-          <rect x="490" y="45" width="14" height="165" rx="2" fill="var(--blue)" />
-          <rect x="506" y="90" width="14" height="120" rx="2" fill="var(--orange)" />
-
-          <text x="105" y="230" fill="var(--text3)" font-size="10" text-anchor="middle">Jan</text>
-          <text x="185" y="230" fill="var(--text3)" font-size="10" text-anchor="middle">Feb</text>
-          <text x="265" y="230" fill="var(--text3)" font-size="10" text-anchor="middle">Mar</text>
-          <text x="345" y="230" fill="var(--text3)" font-size="10" text-anchor="middle">Apr</text>
-          <text x="425" y="230" fill="var(--text3)" font-size="10" text-anchor="middle">May</text>
-          <text x="505" y="230" fill="var(--text3)" font-size="10" text-anchor="middle">Jun</text>
-
-          <text x="40" y="34" fill="var(--text3)" font-size="10" text-anchor="end">30k</text>
-          <text x="40" y="84" fill="var(--text3)" font-size="10" text-anchor="end">20k</text>
-          <text x="40" y="134" fill="var(--text3)" font-size="10" text-anchor="end">10k</text>
-          <text x="40" y="184" fill="var(--text3)" font-size="10" text-anchor="end">5k</text>
-          <text x="40" y="214" fill="var(--text3)" font-size="10" text-anchor="end">0</text>
+        <svg viewBox="0 0 600 240" class="bm-svg-chart" role="img" aria-label="Sales and purchases totals for the last six months">
+          <?php for ($tickIndex = 0; $tickIndex <= 4; $tickIndex++): $tickY = 200 - ($tickIndex * 42.5); $tickValue = $chartTick * $tickIndex; ?>
+            <line x1="55" y1="<?php echo e(number_format($tickY, 1, '.', '')); ?>" x2="570" y2="<?php echo e(number_format($tickY, 1, '.', '')); ?>" stroke="var(--border)" <?php echo $tickIndex > 0 ? 'stroke-dasharray="4"' : ''; ?> />
+            <text x="47" y="<?php echo e(number_format($tickY + 4, 1, '.', '')); ?>" fill="var(--text3)" font-size="10" text-anchor="end"><?php echo e($compactChartNumber((float)$tickValue)); ?></text>
+          <?php endfor; ?>
+          <?php $chartIndex = 0; foreach ($chartMonths as $chartMonth):
+              $groupX = 98 + ($chartIndex * 86);
+              $salesHeight = ($chartMonth['sales'] / $chartAxisMax) * 170;
+              $purchaseHeight = ($chartMonth['purchases'] / $chartAxisMax) * 170;
+          ?>
+            <rect x="<?php echo $groupX - 18; ?>" y="<?php echo e(number_format(200 - $salesHeight, 2, '.', '')); ?>" width="16" height="<?php echo e(number_format($salesHeight, 2, '.', '')); ?>" rx="2" fill="var(--blue)"><title><?php echo e($chartMonth['label'] . ' sales: ' . formatCurrency($chartMonth['sales'], $bizCur)); ?></title></rect>
+            <rect x="<?php echo $groupX + 2; ?>" y="<?php echo e(number_format(200 - $purchaseHeight, 2, '.', '')); ?>" width="16" height="<?php echo e(number_format($purchaseHeight, 2, '.', '')); ?>" rx="2" fill="var(--orange)"><title><?php echo e($chartMonth['label'] . ' purchases: ' . formatCurrency($chartMonth['purchases'], $bizCur)); ?></title></rect>
+            <text x="<?php echo $groupX; ?>" y="224" fill="var(--text3)" font-size="10" text-anchor="middle"><?php echo e($chartMonth['label']); ?></text>
+          <?php $chartIndex++; endforeach; ?>
         </svg>
       </div>
     </div>
@@ -373,7 +393,7 @@ $canViewAudit = hasPermission($conn, $dashboardMembershipId, $businessId, 'audit
         </div>
         <div class="pnl-row">
           <span class="pnl-label">Cost of Goods Sold (COGS)</span>
-          <span class="pnl-val" style="color: var(--text);"><?php echo formatCurrency($estimatedCOGS, $bizCur); ?></span>
+          <span class="pnl-val" style="color: var(--text);"><?php echo formatCurrency($actualCOGS, $bizCur); ?></span>
         </div>
         <div class="pnl-row">
           <span class="pnl-label">Total Expenses</span>

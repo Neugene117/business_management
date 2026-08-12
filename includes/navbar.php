@@ -1,4 +1,8 @@
 <?php
+require_once __DIR__ . '/../config/database.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
+
 $isNotificationEndpoint = isset($_SERVER['SCRIPT_FILENAME'])
     && realpath($_SERVER['SCRIPT_FILENAME']) === realpath(__FILE__);
 

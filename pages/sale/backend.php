@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/../../config/session.php';
 require_once __DIR__ . '/../../config/database.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../includes/tenant.php';
 require_once __DIR__ . '/../../includes/permission_helper.php';
@@ -106,14 +108,13 @@ try {
                 $batchId = !empty($batchIds[$index]) ? (int)$batchIds[$index] : null;
                 if ($productId <= 0 || $quantity <= 0) continue;
 
-                $productStmt = mysqli_prepare($conn, 'SELECT id,name,sku,sale_price,default_selling_price,cost_price,track_batches,track_expiry FROM products WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
+                $productStmt = mysqli_prepare($conn, 'SELECT id,name,sku,sale_price,cost_price,track_batches,track_expiry FROM products WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
                 mysqli_stmt_bind_param($productStmt, 'ii', $productId, $businessId);
                 mysqli_stmt_execute($productStmt);
                 $product = mysqli_fetch_assoc(mysqli_stmt_get_result($productStmt));
                 if (!$product) throw new RuntimeException('One of the selected products is unavailable.');
 
                 $defaultPrice = (float)$product['sale_price'];
-                if ($defaultPrice <= 0 && (float)$product['default_selling_price'] >= 0) $defaultPrice = (float)$product['default_selling_price'];
                 $price = $submittedPrice;
                 if ($price < 0) throw new InvalidArgumentException('Selling price cannot be negative.');
                 if (abs($price - $defaultPrice) > 0.00005) {

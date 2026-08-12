@@ -5,6 +5,8 @@ $page_title = "My Profile";
 // on the business_management database unambiguous.
 require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../includes/header.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 requireLogin();
 
 $userId = $_SESSION['user_id'] ?? 0;

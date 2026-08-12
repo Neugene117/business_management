@@ -1,18 +1,16 @@
 <?php
 require_once __DIR__ . '/config/session.php';
 require_once __DIR__ . '/config/database.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 require_once __DIR__ . '/includes/audit.php';
 
 if (isset($_SESSION['user_id'])) {
     $userId = $_SESSION['user_id'];
     $businessId = $_SESSION['active_business_id'] ?? null;
     
-    // Log audit event
-    $conn = mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-    if ($conn) {
-        writeAuditLog($conn, $businessId, 'LOGOUT_SUCCESS', 'user', $userId);
-        mysqli_close($conn);
-    }
+    // Reuse the shared request connection for the audit event.
+    writeAuditLog($conn, $businessId, 'LOGOUT_SUCCESS', 'user', $userId);
 }
 
 // Unset all of the session variables

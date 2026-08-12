@@ -2,6 +2,8 @@
 ob_start();
 require_once __DIR__ . '/../config/session.php';
 require_once __DIR__ . '/../config/database.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/tenant.php';
 require_once __DIR__ . '/permission_helper.php';

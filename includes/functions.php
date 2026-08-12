@@ -302,8 +302,8 @@ function syncProductWeightedAverageCost($conn, int $businessId, int $productId):
         return (float)(mysqli_fetch_assoc(mysqli_stmt_get_result($current))['cost_price'] ?? 0.0);
     }
     $average = (float)$totals['stock_value'] / $quantity;
-    $update = mysqli_prepare($conn, 'UPDATE products SET cost_price = ?, default_purchase_price = ?, updated_at = NOW(6) WHERE id = ? AND business_id = ?');
-    mysqli_stmt_bind_param($update, 'ddii', $average, $average, $productId, $businessId);
+    $update = mysqli_prepare($conn, 'UPDATE products SET cost_price = ?, updated_at = NOW(6) WHERE id = ? AND business_id = ?');
+    mysqli_stmt_bind_param($update, 'dii', $average, $productId, $businessId);
     mysqli_stmt_execute($update);
 
     return $average;

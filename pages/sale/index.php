@@ -1,6 +1,8 @@
 <?php
 $page_title = 'Sales Orders';
 require_once __DIR__ . '/../../includes/header.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 
 $permissions = require __DIR__ . '/permissions.php';
 requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_business_id'] ?? null, $permissions['view']);
@@ -141,7 +143,7 @@ while ($lRow = mysqli_fetch_assoc($lResult)) {
 }
 
 // Fetch active products
-$prodQuery = "SELECT id,name,sku,uom,sale_price,default_selling_price,track_batches,track_expiry FROM products WHERE business_id=? AND is_active=1 ORDER BY name";
+$prodQuery = "SELECT id,name,sku,uom,sale_price,track_batches,track_expiry FROM products WHERE business_id=? AND is_active=1 ORDER BY name";
 $pStmt = mysqli_prepare($conn, $prodQuery);
 mysqli_stmt_bind_param($pStmt, 'i', $businessId);
 mysqli_stmt_execute($pStmt);

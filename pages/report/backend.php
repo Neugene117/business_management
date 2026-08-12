@@ -1,6 +1,8 @@
 <?php
 $isReportWorkerRequest = PHP_SAPI === 'cli' && in_array('--run-due', $argv ?? [], true);
 require_once __DIR__ . '/../../config/database.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 require_once __DIR__ . '/../../includes/functions.php';
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 if (!$isReportWorkerRequest) {

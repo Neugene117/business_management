@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/../../config/session.php';
 require_once __DIR__ . '/../../config/database.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../includes/tenant.php';
 require_once __DIR__ . '/../../includes/permission_helper.php';

@@ -1,6 +1,8 @@
 <?php
 $page_title = 'Reports';
 require_once __DIR__ . '/../../includes/header.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 
 $permissions = require __DIR__ . '/permissions.php';
 $businessId = (int)($_SESSION['active_business_id'] ?? 0);
@@ -40,7 +42,6 @@ $cogs = fetchReportValue($conn, "SELECT COALESCE(SUM((si.quantity-$returnedQuant
 $expenses = fetchReportValue($conn, "SELECT COALESCE(SUM(total_amount),0) total FROM expenses WHERE business_id=? AND status='POSTED' AND DATE(expense_date) BETWEEN ? AND ?", $businessId, $startDate, $endDate);
 $grossProfit = $revenue - $cogs;
 $netIncome = $grossProfit - $expenses;
-$grossMargin = $revenue > 0 ? ($grossProfit / $revenue) * 100 : 0;
 
 $businessStmt = mysqli_prepare($conn, 'SELECT business_name,currency_code,timezone FROM businesses WHERE id=? LIMIT 1');
 mysqli_stmt_bind_param($businessStmt, 'i', $businessId);
@@ -106,7 +107,7 @@ while ($report = mysqli_fetch_assoc($historyResult)) $generatedReports[] = $repo
 <section class="report-summary" id="pnl-overview" aria-label="Financial summary">
   <div class="card report-metric"><span>Revenue</span><strong><?php echo formatCurrency($revenue, $currency); ?></strong><small>Sales excluding tax</small></div>
   <div class="card report-metric"><span>Cost of goods</span><strong><?php echo formatCurrency($cogs, $currency); ?></strong><small>Recorded cost of sales</small></div>
-  <div class="card report-metric"><span>Gross profit</span><strong><?php echo formatCurrency($grossProfit, $currency); ?></strong><small><?php echo number_format($grossMargin, 1); ?>% gross margin</small></div>
+  <div class="card report-metric"><span>Gross profit</span><strong><?php echo formatCurrency($grossProfit, $currency); ?></strong></div>
   <div class="card report-metric"><span>Operating expenses</span><strong><?php echo formatCurrency($expenses, $currency); ?></strong><small>Posted expenses</small></div>
 </section>
 

@@ -1,4 +1,8 @@
 <?php
+require_once __DIR__ . '/../config/database.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
+
 // Render the real role, or the Super Admin's validated read-only preview role.
 $user_role = getEffectiveUserRole();
 $role_query = getRolePreviewQuery();
@@ -144,6 +148,10 @@ $canViewLeave = hasPermission($conn, $sidebarMembershipId, $sidebarBusinessId, '
             <div class="app-grid-desc">Track supplier lots</div>
           </div>
         </a>
+        <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Receiving'); ?>" href="<?php echo $root_prefix; ?>pages/receiving/index.php<?php echo $role_query; ?>" id="nav-receiving">
+          <div class="app-grid-icon-wrap" style="background:var(--green-bg);"><svg viewBox="0 0 24 24" style="stroke:var(--green);"><path d="M21 8l-9 5-9-5M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M12 13v8"/></svg></div>
+          <div class="app-grid-info"><div class="app-grid-name">Receiving</div><div class="app-grid-desc">Receive purchased stock</div></div>
+        </a>
         <?php endif; ?>
         <?php if ($canViewExpenses): ?>
         <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Expenses'); ?>" href="<?php echo $root_prefix; ?>pages/expense/index.php<?php echo $role_query; ?>" id="nav-expenses">
@@ -180,6 +188,12 @@ $canViewLeave = hasPermission($conn, $sidebarMembershipId, $sidebarBusinessId, '
             <div class="app-grid-name">Products</div>
             <div class="app-grid-desc">Catalog item parameters</div>
           </div>
+        </a>
+        <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Product Categories'); ?>" href="<?php echo $root_prefix; ?>pages/product_category/index.php<?php echo $role_query; ?>" id="nav-product-categories">
+          <div class="app-grid-icon-wrap" style="background:var(--blue-bg);"><svg viewBox="0 0 24 24" style="stroke:var(--blue);"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg></div><div class="app-grid-info"><div class="app-grid-name">Product Categories</div><div class="app-grid-desc">Organize the product catalog</div></div>
+        </a>
+        <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Units of Measure'); ?>" href="<?php echo $root_prefix; ?>pages/unit/index.php<?php echo $role_query; ?>" id="nav-units">
+          <div class="app-grid-icon-wrap" style="background:var(--amber-bg);"><svg viewBox="0 0 24 24" style="stroke:var(--amber);"><path d="M3 7h18M6 4v6M10 4v3M14 4v6M18 4v3M3 17h18"/></svg></div><div class="app-grid-info"><div class="app-grid-name">Units of Measure</div><div class="app-grid-desc">Manage quantity units</div></div>
         </a>
         <?php endif; ?>
         <?php if ($canViewSuppliers): ?>
@@ -308,6 +322,10 @@ $canViewLeave = hasPermission($conn, $sidebarMembershipId, $sidebarBusinessId, '
             <div class="app-grid-desc">My recorded supplier lots</div>
           </div>
         </a>
+        <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Receiving'); ?>" href="<?php echo $root_prefix; ?>pages/receiving/index.php<?php echo $role_query; ?>" id="nav-receiving">
+          <div class="app-grid-icon-wrap" style="background:var(--green-bg);"><svg viewBox="0 0 24 24" style="stroke:var(--green);"><path d="M21 8l-9 5-9-5M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M12 13v8"/></svg></div>
+          <div class="app-grid-info"><div class="app-grid-name">Receiving</div><div class="app-grid-desc">Track pending stock receipts</div></div>
+        </a>
         <?php endif; ?>
         <?php if ($canViewInventory): ?>
         <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Inventory'); ?>" href="<?php echo $root_prefix; ?>pages/inventory/index.php<?php echo $role_query; ?>" id="nav-stock">
@@ -373,6 +391,12 @@ $canViewLeave = hasPermission($conn, $sidebarMembershipId, $sidebarBusinessId, '
             <div class="app-grid-name">Products</div>
             <div class="app-grid-desc">Product catalog records</div>
           </div>
+        </a>
+        <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Product Categories'); ?>" href="<?php echo $root_prefix; ?>pages/product_category/index.php<?php echo $role_query; ?>" id="nav-product-categories">
+          <div class="app-grid-icon-wrap" style="background:var(--blue-bg);"><svg viewBox="0 0 24 24" style="stroke:var(--blue);"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg></div><div class="app-grid-info"><div class="app-grid-name">Product Categories</div><div class="app-grid-desc">Organize the product catalog</div></div>
+        </a>
+        <a class="app-grid-item<?php echo isPageActive($active_page_title, 'Units of Measure'); ?>" href="<?php echo $root_prefix; ?>pages/unit/index.php<?php echo $role_query; ?>" id="nav-units">
+          <div class="app-grid-icon-wrap" style="background:var(--amber-bg);"><svg viewBox="0 0 24 24" style="stroke:var(--amber);"><path d="M3 7h18M6 4v6M10 4v3M14 4v6M18 4v3M3 17h18"/></svg></div><div class="app-grid-info"><div class="app-grid-name">Units of Measure</div><div class="app-grid-desc">Manage quantity units</div></div>
         </a>
         <?php endif; ?>
         <?php if ($canViewSuppliers): ?>

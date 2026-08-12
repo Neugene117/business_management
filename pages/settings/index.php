@@ -1,6 +1,8 @@
 <?php
 $page_title = 'Settings';
 require_once __DIR__ . '/../../includes/header.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 
 $permissions = require __DIR__ . '/permissions.php';
 $businessId = (int)($_SESSION['active_business_id'] ?? 0);

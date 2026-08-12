@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/../../config/session.php';
 require_once __DIR__ . '/../../config/database.php';
+/** @var mysqli $conn */
+$conn = getDatabaseConnection();
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../includes/tenant.php';
 require_once __DIR__ . '/../../includes/permission_helper.php';
@@ -22,9 +24,10 @@ $action = (string)($_POST['action'] ?? '');
 $businessId = (int)$_SESSION['active_business_id'];
 $membershipId = (int)$_SESSION['membership_id'];
 $roleQuery = isset($_GET['role']) ? '?role=' . rawurlencode((string)$_GET['role']) : '';
-$finish = static function (string $message, string $type = 'error') use ($roleQuery): void {
+$returnPath = (string)($_POST['return_to'] ?? '') === 'receiving' ? '../receiving/index.php' : 'index.php';
+$finish = static function (string $message, string $type = 'error') use ($roleQuery, $returnPath): void {
     setFlashMessage($type, $message);
-    header('Location: index.php' . $roleQuery);
+    header('Location: ' . $returnPath . $roleQuery);
     exit;
 };
 
@@ -39,6 +42,7 @@ try {
         $productIds = is_array($_POST['product_ids'] ?? null) ? $_POST['product_ids'] : [];
         $quantities = is_array($_POST['quantities'] ?? null) ? $_POST['quantities'] : [];
         $unitCosts = is_array($_POST['unit_costs'] ?? null) ? $_POST['unit_costs'] : [];
+        $unitSellingPrices = is_array($_POST['unit_selling_prices'] ?? null) ? $_POST['unit_selling_prices'] : [];
         $expiryDates = is_array($_POST['expiry_dates'] ?? null) ? $_POST['expiry_dates'] : [];
         $idempotencyKey = trim((string)($_POST['idempotency_key'] ?? ''));
         if ($purchaseNumber === '' || $purchaseDateInput === '' || $supplierId <= 0 || $locationId <= 0 || !$productIds) {
@@ -49,7 +53,7 @@ try {
 
         mysqli_begin_transaction($conn);
         try {
-            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_CREATE', ['purchase_number'=>$purchaseNumber,'date'=>$purchaseDateInput,'supplier_id'=>$supplierId,'location_id'=>$locationId,'products'=>$productIds,'quantities'=>$quantities,'costs'=>$unitCosts]);
+            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_CREATE', ['purchase_number'=>$purchaseNumber,'date'=>$purchaseDateInput,'supplier_id'=>$supplierId,'location_id'=>$locationId,'products'=>$productIds,'quantities'=>$quantities,'costs'=>$unitCosts,'selling_prices'=>$unitSellingPrices]);
             $supplierStmt = mysqli_prepare($conn, 'SELECT id FROM suppliers WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
             mysqli_stmt_bind_param($supplierStmt, 'ii', $supplierId, $businessId);
             mysqli_stmt_execute($supplierStmt);
@@ -58,6 +62,16 @@ try {
             mysqli_stmt_bind_param($locationStmt, 'ii', $locationId, $businessId);
             mysqli_stmt_execute($locationStmt);
             if (!mysqli_fetch_assoc(mysqli_stmt_get_result($locationStmt))) throw new RuntimeException('Select a valid active location.');
+            $businessStmt = mysqli_prepare($conn, 'SELECT business_name FROM businesses WHERE id=? LIMIT 1');
+            mysqli_stmt_bind_param($businessStmt, 'i', $businessId);
+            mysqli_stmt_execute($businessStmt);
+            $business = mysqli_fetch_assoc(mysqli_stmt_get_result($businessStmt));
+            if (!$business) throw new RuntimeException('The active company could not be found.');
+            $batchPrefix = preg_replace('/[^\p{L}\p{N}]+/u', '-', trim((string)$business['business_name']));
+            $batchPrefix = trim((string)$batchPrefix, '-');
+            if ($batchPrefix === '') $batchPrefix = 'COMPANY';
+            $batchPrefix = function_exists('mb_strtoupper') ? mb_strtoupper($batchPrefix, 'UTF-8') : strtoupper($batchPrefix);
+            $batchPrefix = function_exists('mb_substr') ? mb_substr($batchPrefix, 0, 45, 'UTF-8') : substr($batchPrefix, 0, 45);
             $duplicate = mysqli_prepare($conn, 'SELECT id FROM purchases WHERE business_id=? AND purchase_number=? FOR UPDATE');
             mysqli_stmt_bind_param($duplicate, 'is', $businessId, $purchaseNumber);
             mysqli_stmt_execute($duplicate);
@@ -74,7 +88,9 @@ try {
                 $productId = (int)$rawProductId;
                 $quantity = (float)($quantities[$index] ?? 0);
                 $unitCost = (float)($unitCosts[$index] ?? 0);
-                if ($productId <= 0 || $quantity <= 0 || $unitCost < 0) continue;
+                $unitSellingPrice = (float)($unitSellingPrices[$index] ?? -1);
+                if ($productId <= 0 || $quantity <= 0) continue;
+                if ($unitCost < 0 || $unitSellingPrice < 0) throw new InvalidArgumentException('Cost price and selling price must be non-negative for every purchase item.');
                 $productStmt = mysqli_prepare($conn, 'SELECT id,name,track_batches,track_expiry FROM products WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
                 mysqli_stmt_bind_param($productStmt, 'ii', $productId, $businessId);
                 mysqli_stmt_execute($productStmt);
@@ -86,10 +102,9 @@ try {
                     $expiryDate = trim((string)($expiryDates[$index] ?? '')) ?: null;
                     if ((int)$product['track_expiry'] === 1 && $expiryDate === null) throw new RuntimeException('Enter an expiry date for ' . $product['name'] . '.');
 
-                    // Batch numbers are server-generated and cannot be supplied or
-                    // overridden by the browser. Purchase ID + line position keeps
-                    // the number stable, readable, and unique for this product.
-                    $lotNumber = sprintf('LOT-%d-%d-%d-%d', $businessId, $productId, $purchaseId, $index + 1);
+                    // Batch numbers are server-generated from the company name.
+                    // Purchase ID + line position keeps each value stable and unique.
+                    $lotNumber = sprintf('%s-BATCH-%d-%d', $batchPrefix, $purchaseId, $index + 1);
                     $batchInsert = mysqli_prepare($conn, 'INSERT INTO product_batches (business_id,product_id,lot_number,expires_at,created_at) VALUES (?,?,?,?,UTC_TIMESTAMP(6))');
                     mysqli_stmt_bind_param($batchInsert, 'iiss', $businessId, $productId, $lotNumber, $expiryDate);
                     if (!mysqli_stmt_execute($batchInsert)) throw new RuntimeException('The automatic product batch could not be created.');
@@ -97,8 +112,8 @@ try {
                 }
 
                 $lineTotal = $quantity * $unitCost;
-                $itemStmt = mysqli_prepare($conn, 'INSERT INTO purchase_items (business_id,purchase_id,product_id,batch_id,ordered_quantity,received_quantity,unit_cost,discount_amount,tax_amount,line_total,created_at) VALUES (?,?,?,?,?,0,?,0,0,?,UTC_TIMESTAMP(6))');
-                mysqli_stmt_bind_param($itemStmt, 'iiiiddd', $businessId, $purchaseId, $productId, $batchId, $quantity, $unitCost, $lineTotal);
+                $itemStmt = mysqli_prepare($conn, 'INSERT INTO purchase_items (business_id,purchase_id,product_id,batch_id,ordered_quantity,received_quantity,unit_cost,unit_selling_price,discount_amount,tax_amount,line_total,created_at) VALUES (?,?,?,?,?,0,?,?,0,0,?,UTC_TIMESTAMP(6))');
+                mysqli_stmt_bind_param($itemStmt, 'iiiidddd', $businessId, $purchaseId, $productId, $batchId, $quantity, $unitCost, $unitSellingPrice, $lineTotal);
                 if (!mysqli_stmt_execute($itemStmt)) throw new RuntimeException('A purchase item could not be saved.');
                 $subtotal += $lineTotal;
                 $validItems++;
@@ -135,14 +150,16 @@ try {
         $receivedAtInput = trim((string)($_POST['received_at'] ?? ''));
         $itemIds = is_array($_POST['item_ids'] ?? null) ? $_POST['item_ids'] : [];
         $receivedQuantities = is_array($_POST['received_quantities'] ?? null) ? $_POST['received_quantities'] : [];
+        $requestedReceiptStatus = strtoupper(trim((string)($_POST['receipt_status'] ?? 'PENDING')));
         $idempotencyKey = trim((string)($_POST['idempotency_key'] ?? ''));
         if ($purchaseId <= 0 || !$itemIds) throw new InvalidArgumentException('Select a purchase and at least one receipt line.');
+        if (!in_array($requestedReceiptStatus, ['PENDING','RECEIVED'], true)) throw new InvalidArgumentException('Select a valid receiving status.');
         $config = getBusinessInventoryConfig($conn, $businessId);
         $receivedAt = $receivedAtInput !== '' ? businessLocalDateTimeToUtc($receivedAtInput, $config['timezone']) : (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
 
         mysqli_begin_transaction($conn);
         try {
-            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_RECEIPT', ['purchase_id'=>$purchaseId,'items'=>$itemIds,'quantities'=>$receivedQuantities,'supplier_invoice'=>$supplierInvoice]);
+            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_RECEIPT', ['purchase_id'=>$purchaseId,'items'=>$itemIds,'quantities'=>$receivedQuantities,'supplier_invoice'=>$supplierInvoice,'receipt_status'=>$requestedReceiptStatus]);
             $purchaseStmt = mysqli_prepare($conn, 'SELECT id,location_id,purchase_number,status FROM purchases WHERE id=? AND business_id=? FOR UPDATE');
             mysqli_stmt_bind_param($purchaseStmt, 'ii', $purchaseId, $businessId);
             mysqli_stmt_execute($purchaseStmt);
@@ -153,15 +170,17 @@ try {
             $receivedValue = 0.0;
             foreach ($itemIds as $index => $rawItemId) {
                 $itemId = (int)$rawItemId;
-                $receiveNow = (float)($receivedQuantities[$index] ?? 0);
-                if ($receiveNow < 0) throw new InvalidArgumentException('Received quantity cannot be negative.');
-                if ($receiveNow == 0.0) continue;
-                $itemStmt = mysqli_prepare($conn, 'SELECT pi.product_id,pi.batch_id,pi.ordered_quantity,pi.received_quantity,pi.unit_cost,p.name FROM purchase_items pi JOIN products p ON p.id=pi.product_id AND p.business_id=pi.business_id WHERE pi.id=? AND pi.purchase_id=? AND pi.business_id=? FOR UPDATE');
+                if ($itemId <= 0) continue;
+                $itemStmt = mysqli_prepare($conn, 'SELECT pi.product_id,pi.batch_id,pi.ordered_quantity,pi.received_quantity,pi.unit_cost,pi.unit_selling_price,p.name FROM purchase_items pi JOIN products p ON p.id=pi.product_id AND p.business_id=pi.business_id WHERE pi.id=? AND pi.purchase_id=? AND pi.business_id=? FOR UPDATE');
                 mysqli_stmt_bind_param($itemStmt, 'iii', $itemId, $purchaseId, $businessId);
                 mysqli_stmt_execute($itemStmt);
                 $item = mysqli_fetch_assoc(mysqli_stmt_get_result($itemStmt));
                 if (!$item) throw new RuntimeException('A purchase line is invalid.');
                 $remaining = (float)$item['ordered_quantity'] - (float)$item['received_quantity'];
+                if ($remaining <= 0.00005) continue;
+                $receiveNow = $requestedReceiptStatus === 'RECEIVED' ? $remaining : (float)($receivedQuantities[$index] ?? 0);
+                if ($receiveNow < 0) throw new InvalidArgumentException('Received quantity cannot be negative.');
+                if ($receiveNow == 0.0) continue;
                 if ($receiveNow > $remaining + 0.00005) throw new RuntimeException('Receipt for ' . $item['name'] . ' exceeds the remaining ordered quantity of ' . number_format($remaining, 4, '.', '') . '.');
                 $newReceived = (float)$item['received_quantity'] + $receiveNow;
                 $updateItem = mysqli_prepare($conn, 'UPDATE purchase_items SET received_quantity=? WHERE id=? AND purchase_id=? AND business_id=?');
@@ -172,6 +191,9 @@ try {
                     'movement_type'=>'PURCHASE_RECEIPT','quantity_delta'=>$receiveNow,'unit_cost'=>$item['unit_cost'],'occurred_at'=>$receivedAt,
                     'purchase_item_id'=>$itemId,'created_by_membership_id'=>$membershipId,'notes'=>$purchase['purchase_number'] . ' goods receipt','config'=>$config
                 ]);
+                $priceStmt = mysqli_prepare($conn, 'UPDATE products SET sale_price=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
+                mysqli_stmt_bind_param($priceStmt, 'dii', $item['unit_selling_price'], $item['product_id'], $businessId);
+                if (!mysqli_stmt_execute($priceStmt)) throw new RuntimeException('The product selling price could not be updated.');
                 $receivedValue += $receiveNow * (float)$item['unit_cost'];
                 $receivedLines++;
             }
@@ -181,6 +203,7 @@ try {
             mysqli_stmt_bind_param($remainingStmt, 'ii', $purchaseId, $businessId);
             mysqli_stmt_execute($remainingStmt);
             $remainingLines = (int)mysqli_fetch_assoc(mysqli_stmt_get_result($remainingStmt))['remaining_lines'];
+            if ($requestedReceiptStatus === 'RECEIVED' && $remainingLines > 0) throw new RuntimeException('All remaining purchase lines must be included before marking the purchase received.');
             $newStatus = $remainingLines === 0 ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
             if ($newStatus === 'RECEIVED') {
                 $updatePurchase = mysqli_prepare($conn, 'UPDATE purchases SET status=?,received_at=?,received_by_membership_id=?,supplier_invoice_number=COALESCE(?,supplier_invoice_number),updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
@@ -190,7 +213,7 @@ try {
                 mysqli_stmt_bind_param($updatePurchase, 'sisii', $newStatus, $membershipId, $supplierInvoice, $purchaseId, $businessId);
             }
             if (!mysqli_stmt_execute($updatePurchase)) throw new RuntimeException('Purchase receipt status could not be updated.');
-            writeAuditLog($conn, $businessId, 'PURCHASE_RECEIVED', 'purchase', $purchaseId, ['purchase_number'=>$purchase['purchase_number'],'receipt_value'=>$receivedValue,'lines'=>$receivedLines,'status'=>$newStatus]);
+            writeAuditLog($conn, $businessId, 'PURCHASE_RECEIVED', 'purchase', $purchaseId, ['purchase_number'=>$purchase['purchase_number'],'receipt_value'=>$receivedValue,'lines'=>$receivedLines,'requested_status'=>$requestedReceiptStatus,'status'=>$newStatus]);
             completeIdempotencyKey($conn, $businessId, $idempotencyKey, 200, ['purchase_id'=>$purchaseId,'status'=>$newStatus]);
             mysqli_commit($conn);
             $finish($newStatus === 'RECEIVED' ? 'Purchase fully received and stock updated.' : 'Partial receipt posted. Remaining quantities are still open.', 'success');
