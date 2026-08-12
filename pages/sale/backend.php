@@ -89,9 +89,14 @@ try {
             mysqli_stmt_execute($duplicate);
             if (mysqli_fetch_assoc(mysqli_stmt_get_result($duplicate))) throw new RuntimeException('A sale with this number already exists.');
 
+            $activeTax = getActiveBusinessTax($conn, $businessId, true);
+            $taxId = $activeTax['id'] ?? null;
+            $taxName = $activeTax['name'] ?? null;
+            $taxType = $activeTax['tax_type'] ?? null;
+            $taxValue = $activeTax['tax_value'] ?? null;
             $status = 'COMPLETED';
-            $saleStmt = mysqli_prepare($conn, 'INSERT INTO sales (business_id,location_id,customer_id,sale_number,status,sold_at,notes,cashier_membership_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))');
-            mysqli_stmt_bind_param($saleStmt, 'iiissssi', $businessId, $locationId, $customerId, $saleNumber, $status, $soldAt, $notes, $membershipId);
+            $saleStmt = mysqli_prepare($conn, 'INSERT INTO sales (business_id,location_id,customer_id,sale_number,status,sold_at,notes,cashier_membership_id,tax_id,tax_name,tax_type,tax_value,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))');
+            mysqli_stmt_bind_param($saleStmt, 'iiissssiissd', $businessId, $locationId, $customerId, $saleNumber, $status, $soldAt, $notes, $membershipId, $taxId, $taxName, $taxType, $taxValue);
             if (!mysqli_stmt_execute($saleStmt)) throw new RuntimeException('The sale could not be created.');
             $saleId = mysqli_insert_id($conn);
 
@@ -100,6 +105,7 @@ try {
             $totalCogs = 0.0;
             $validItems = 0;
             $overrideAudits = [];
+            $saleLines = [];
 
             foreach ($productIds as $index => $rawProductId) {
                 $productId = (int)$rawProductId;
@@ -155,12 +161,15 @@ try {
                 }
 
                 $netSales = $quantity * $price;
-                $lineTax = $netSales * (float)$config['default_tax_rate'];
+                $lineTax = $activeTax && $activeTax['tax_type'] === 'PERCENTAGE'
+                    ? calculateSaleTax($netSales, $activeTax)
+                    : 0.0;
                 $lineTotal = $netSales + $lineTax;
                 $itemStmt = mysqli_prepare($conn, 'INSERT INTO sale_items (business_id,sale_id,product_id,batch_id,quantity,unit_price,discount_amount,tax_amount,net_sales_amount,line_total,unit_cost_at_sale,cogs_total,created_at) VALUES (?,?,?,?,?,?,0,?,?,?,?,?,UTC_TIMESTAMP(6))');
                 mysqli_stmt_bind_param($itemStmt, 'iiiiddddddd', $businessId, $saleId, $productId, $batchId, $quantity, $price, $lineTax, $netSales, $lineTotal, $unitCost, $cogs);
                 if (!mysqli_stmt_execute($itemStmt)) throw new RuntimeException('A sale item could not be saved.');
                 $saleItemId = mysqli_insert_id($conn);
+                $saleLines[] = ['id'=>$saleItemId, 'net_sales'=>$netSales];
 
                 if ($fifo !== null) {
                     foreach ($fifo['allocations'] as $allocation) {
@@ -182,6 +191,17 @@ try {
             }
 
             if ($validItems === 0) throw new InvalidArgumentException('Add at least one valid sale item.');
+            if ($activeTax && $activeTax['tax_type'] === 'FIXED') {
+                $totalTax = calculateSaleTax($subtotal, $activeTax);
+                $lineAmounts = array_column($saleLines, 'net_sales');
+                $taxAllocations = allocateSaleTax($lineAmounts, $totalTax);
+                $updateLineTax = mysqli_prepare($conn, 'UPDATE sale_items SET tax_amount=?,line_total=net_sales_amount+? WHERE id=? AND business_id=?');
+                foreach ($saleLines as $lineIndex => $saleLine) {
+                    $allocatedTax = (float)($taxAllocations[$lineIndex] ?? 0.0);
+                    mysqli_stmt_bind_param($updateLineTax, 'ddii', $allocatedTax, $allocatedTax, $saleLine['id'], $businessId);
+                    if (!mysqli_stmt_execute($updateLineTax)) throw new RuntimeException('Fixed tax could not be allocated to sale items.');
+                }
+            }
             $totalAmount = $subtotal + $totalTax;
             $amountPaid = $amountPaidInput === '' ? ($paymentMethod === 'CREDIT' ? 0.0 : $totalAmount) : (float)$amountPaidInput;
             if ($amountPaid < 0 || $amountPaid > $totalAmount + 0.00005) throw new InvalidArgumentException('Amount paid must be between zero and the sale total.');
@@ -202,11 +222,12 @@ try {
             }
             writeAuditLog($conn, $businessId, 'SALE_COMPLETED', 'sale', $saleId, [
                 'sale_number'=>$saleNumber,'items'=>$validItems,'total_amount'=>$totalAmount,
-                'total_cogs'=>$totalCogs,'amount_paid'=>$amountPaid,'outstanding'=>max(0, $totalAmount - $amountPaid)
+                'total_cogs'=>$totalCogs,'amount_paid'=>$amountPaid,'outstanding'=>max(0, $totalAmount - $amountPaid),
+                'tax'=>$activeTax ? ['id'=>$activeTax['id'],'name'=>$activeTax['name'],'type'=>$activeTax['tax_type'],'value'=>$activeTax['tax_value'],'amount'=>$totalTax] : null
             ]);
             completeIdempotencyKey($conn, $businessId, $idempotencyKey, 201, ['sale_id'=>$saleId,'sale_number'=>$saleNumber]);
             mysqli_commit($conn);
-            $redirect('Sale completed and inventory updated.', 'success');
+            $redirect('Sale completed and inventory updated.', 'success', 'sale_completed=1');
         } catch (Throwable $error) {
             mysqli_rollback($conn);
             throw $error;
@@ -250,14 +271,17 @@ try {
                 $quantity = (float)($returnQuantities[$index] ?? 0);
                 $restock = ($dispositions[$index] ?? 'RESTOCK') === 'RESTOCK';
                 if ($saleItemId <= 0 || $quantity <= 0) continue;
-                $itemStmt = mysqli_prepare($conn, "SELECT si.product_id,si.batch_id,si.quantity,si.unit_price,si.unit_cost_at_sale,COALESCE((SELECT SUM(sri.quantity) FROM sale_return_items sri JOIN sale_returns sr ON sr.id=sri.sale_return_id WHERE sri.sale_item_id=si.id AND sr.status='COMPLETED'),0) returned_quantity FROM sale_items si WHERE si.id=? AND si.sale_id=? AND si.business_id=? FOR UPDATE");
+                $itemStmt = mysqli_prepare($conn, "SELECT si.product_id,si.batch_id,si.quantity,si.unit_price,si.tax_amount,si.unit_cost_at_sale,COALESCE((SELECT SUM(sri.quantity) FROM sale_return_items sri JOIN sale_returns sr ON sr.id=sri.sale_return_id WHERE sri.sale_item_id=si.id AND sr.status='COMPLETED'),0) returned_quantity FROM sale_items si WHERE si.id=? AND si.sale_id=? AND si.business_id=? FOR UPDATE");
                 mysqli_stmt_bind_param($itemStmt, 'iii', $saleItemId, $saleId, $businessId);
                 mysqli_stmt_execute($itemStmt);
                 $item = mysqli_fetch_assoc(mysqli_stmt_get_result($itemStmt));
                 if (!$item) throw new RuntimeException('A selected sale item is invalid.');
                 $remainingReturnable = (float)$item['quantity'] - (float)$item['returned_quantity'];
                 if ($quantity > $remainingReturnable + 0.00005) throw new RuntimeException('Returned quantity exceeds the quantity still returnable.');
-                $lineTotal = $quantity * (float)$item['unit_price'];
+                $lineTaxRefund = (float)$item['quantity'] > 0
+                    ? ($quantity / (float)$item['quantity']) * (float)$item['tax_amount']
+                    : 0.0;
+                $lineTotal = ($quantity * (float)$item['unit_price']) + $lineTaxRefund;
                 $returnItemStmt = mysqli_prepare($conn, 'INSERT INTO sale_return_items (business_id,sale_return_id,sale_item_id,product_id,batch_id,quantity,unit_price,unit_cost_at_sale,line_total) VALUES (?,?,?,?,?,?,?,?,?)');
                 mysqli_stmt_bind_param($returnItemStmt, 'iiiiidddd', $businessId, $returnId, $saleItemId, $item['product_id'], $item['batch_id'], $quantity, $item['unit_price'], $item['unit_cost_at_sale'], $lineTotal);
                 if (!mysqli_stmt_execute($returnItemStmt)) throw new RuntimeException('A returned item could not be saved.');

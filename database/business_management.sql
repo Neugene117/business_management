@@ -174,6 +174,26 @@ INSERT INTO `business_accounting_settings` (`business_id`, `inventory_valuation_
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `taxes`
+--
+
+CREATE TABLE `taxes` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `business_id` bigint(20) UNSIGNED NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `tax_type` enum('PERCENTAGE','FIXED') NOT NULL,
+  `tax_value` decimal(19,4) NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 0,
+  `active_business_id` bigint(20) UNSIGNED GENERATED ALWAYS AS (CASE WHEN `is_active` = 1 THEN `business_id` ELSE NULL END) STORED,
+  `created_at` datetime(6) NOT NULL DEFAULT current_timestamp(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT current_timestamp(6) ON UPDATE current_timestamp(6),
+  CONSTRAINT `chk_taxes_value` CHECK (`tax_value` >= 0),
+  CONSTRAINT `chk_taxes_percentage` CHECK (`tax_type` <> 'PERCENTAGE' OR `tax_value` <= 100)
+) ;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `business_approval_events`
 --
 
@@ -1086,6 +1106,7 @@ CREATE TABLE `purchases` (
   `shipping_amount` decimal(19,4) NOT NULL DEFAULT 0.0000,
   `total_amount` decimal(19,4) NOT NULL DEFAULT 0.0000,
   `amount_paid` decimal(19,4) NOT NULL DEFAULT 0.0000,
+  `payment_status` enum('DEBT','PARTIALLY_PAID','PAID') NOT NULL DEFAULT 'DEBT',
   `notes` varchar(2000) DEFAULT NULL,
   `created_by_membership_id` bigint(20) UNSIGNED NOT NULL,
   `approved_by_membership_id` bigint(20) UNSIGNED DEFAULT NULL,
@@ -1098,9 +1119,9 @@ CREATE TABLE `purchases` (
 -- Dumping data for table `purchases`
 --
 
-INSERT INTO `purchases` (`id`, `business_id`, `location_id`, `supplier_id`, `purchase_number`, `supplier_invoice_number`, `status`, `purchase_date`, `expected_date`, `received_at`, `subtotal`, `discount_amount`, `tax_amount`, `shipping_amount`, `total_amount`, `amount_paid`, `notes`, `created_by_membership_id`, `approved_by_membership_id`, `received_by_membership_id`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 1, 'PUR-2026-0001', 'INV-RWD-1001', 'RECEIVED', '2026-08-02 07:30:00.000000', '2026-08-02', '2026-08-02 09:00:00.000000', 519000.0000, 0.0000, 0.0000, 0.0000, 519000.0000, 519000.0000, 'Initial August stock purchase', 4, 1, 4, '2026-08-08 13:06:12.321639', '2026-08-08 13:06:12.321639'),
-(2, 1, 1, 2, 'PUR-2026-0002', 'INV-FFR-2001', 'RECEIVED', '2026-08-04 06:45:00.000000', '2026-08-04', '2026-08-04 08:00:00.000000', 54800.0000, 0.0000, 0.0000, 0.0000, 54800.0000, 54800.0000, 'Replenishment purchase', 4, 2, 4, '2026-08-08 13:06:12.652341', '2026-08-08 13:06:12.652341');
+INSERT INTO `purchases` (`id`, `business_id`, `location_id`, `supplier_id`, `purchase_number`, `supplier_invoice_number`, `status`, `purchase_date`, `expected_date`, `received_at`, `subtotal`, `discount_amount`, `tax_amount`, `shipping_amount`, `total_amount`, `amount_paid`, `payment_status`, `notes`, `created_by_membership_id`, `approved_by_membership_id`, `received_by_membership_id`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 1, 'PUR-2026-0001', 'INV-RWD-1001', 'RECEIVED', '2026-08-02 07:30:00.000000', '2026-08-02', '2026-08-02 09:00:00.000000', 519000.0000, 0.0000, 0.0000, 0.0000, 519000.0000, 519000.0000, 'PAID', 'Initial August stock purchase', 4, 1, 4, '2026-08-08 13:06:12.321639', '2026-08-08 13:06:12.321639'),
+(2, 1, 1, 2, 'PUR-2026-0002', 'INV-FFR-2001', 'RECEIVED', '2026-08-04 06:45:00.000000', '2026-08-04', '2026-08-04 08:00:00.000000', 54800.0000, 0.0000, 0.0000, 0.0000, 54800.0000, 54800.0000, 'PAID', 'Replenishment purchase', 4, 2, 4, '2026-08-08 13:06:12.652341', '2026-08-08 13:06:12.652341');
 
 -- --------------------------------------------------------
 
@@ -1150,6 +1171,9 @@ CREATE TABLE `purchase_payments` (
   `amount` decimal(19,4) NOT NULL,
   `payment_method` enum('CASH','CARD','BANK_TRANSFER','MOBILE_MONEY','CHEQUE','OTHER') NOT NULL,
   `reference_number` varchar(120) DEFAULT NULL,
+  `phone_number` varchar(32) DEFAULT NULL,
+  `bank_name` varchar(150) DEFAULT NULL,
+  `bank_account_number` varchar(120) DEFAULT NULL,
   `paid_at` datetime(6) NOT NULL,
   `recorded_by_membership_id` bigint(20) UNSIGNED NOT NULL,
   `notes` varchar(500) DEFAULT NULL,
@@ -1160,9 +1184,9 @@ CREATE TABLE `purchase_payments` (
 -- Dumping data for table `purchase_payments`
 --
 
-INSERT INTO `purchase_payments` (`id`, `business_id`, `purchase_id`, `amount`, `payment_method`, `reference_number`, `paid_at`, `recorded_by_membership_id`, `notes`, `created_at`) VALUES
-(1, 1, 1, 519000.0000, 'BANK_TRANSFER', 'BANK-DEMO-PUR-0001', '2026-08-02 09:10:00.000000', 1, 'Full payment', '2026-08-08 13:06:12.639444'),
-(2, 1, 2, 54800.0000, 'MOBILE_MONEY', 'MOMO-DEMO-PUR-0002', '2026-08-04 08:05:00.000000', 2, 'Full payment', '2026-08-08 13:06:12.693852');
+INSERT INTO `purchase_payments` (`id`, `business_id`, `purchase_id`, `amount`, `payment_method`, `reference_number`, `phone_number`, `bank_name`, `bank_account_number`, `paid_at`, `recorded_by_membership_id`, `notes`, `created_at`) VALUES
+(1, 1, 1, 519000.0000, 'BANK_TRANSFER', 'BANK-DEMO-PUR-0001', NULL, 'Bank of Kigali', '1000000001', '2026-08-02 09:10:00.000000', 1, 'Full payment', '2026-08-08 13:06:12.639444'),
+(2, 1, 2, 54800.0000, 'MOBILE_MONEY', 'MOMO-DEMO-PUR-0002', '+250788000002', NULL, NULL, '2026-08-04 08:05:00.000000', 2, 'Full payment', '2026-08-08 13:06:12.693852');
 
 -- --------------------------------------------------------
 
@@ -1327,6 +1351,10 @@ CREATE TABLE `sales` (
   `subtotal` decimal(19,4) NOT NULL DEFAULT 0.0000,
   `discount_amount` decimal(19,4) NOT NULL DEFAULT 0.0000,
   `tax_amount` decimal(19,4) NOT NULL DEFAULT 0.0000,
+  `tax_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `tax_name` varchar(100) DEFAULT NULL,
+  `tax_type` enum('PERCENTAGE','FIXED') DEFAULT NULL,
+  `tax_value` decimal(19,4) DEFAULT NULL,
   `total_amount` decimal(19,4) NOT NULL DEFAULT 0.0000,
   `total_cogs` decimal(19,4) NOT NULL DEFAULT 0.0000,
   `gross_profit` decimal(19,4) GENERATED ALWAYS AS (`total_amount` - `tax_amount` - `total_cogs`) STORED,
@@ -1809,6 +1837,15 @@ ALTER TABLE `business_accounting_settings`
   ADD PRIMARY KEY (`business_id`);
 
 --
+-- Indexes for table `taxes`
+--
+ALTER TABLE `taxes`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_taxes_business_name` (`business_id`,`name`),
+  ADD UNIQUE KEY `uq_taxes_one_active` (`active_business_id`),
+  ADD KEY `idx_taxes_business_status` (`business_id`,`is_active`);
+
+--
 -- Indexes for table `business_approval_events`
 --
 ALTER TABLE `business_approval_events`
@@ -2043,6 +2080,7 @@ ALTER TABLE `products`
 ALTER TABLE `product_batches`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `uq_product_batch_lot` (`business_id`,`product_id`,`lot_number`),
+  ADD UNIQUE KEY `uq_product_batches_business_lot` (`business_id`,`lot_number`),
   ADD UNIQUE KEY `uq_product_batches_business_product_id` (`business_id`,`product_id`,`id`),
   ADD UNIQUE KEY `uq_product_batches_business_id` (`business_id`,`id`);
 
@@ -2152,7 +2190,8 @@ ALTER TABLE `sales`
   ADD KEY `idx_sales_sold_at` (`business_id`,`sold_at`),
   ADD KEY `idx_sales_customer` (`business_id`,`customer_id`,`sold_at`),
   ADD KEY `fk_sales_location` (`business_id`,`location_id`),
-  ADD KEY `fk_sales_cashier` (`business_id`,`cashier_membership_id`);
+  ADD KEY `fk_sales_cashier` (`business_id`,`cashier_membership_id`),
+  ADD KEY `fk_sales_tax` (`tax_id`);
 
 --
 -- Indexes for table `sale_items`
@@ -2290,6 +2329,12 @@ ALTER TABLE `audit_logs`
 --
 ALTER TABLE `businesses`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+
+--
+-- AUTO_INCREMENT for table `taxes`
+--
+ALTER TABLE `taxes`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `business_approval_events`
@@ -2861,7 +2906,14 @@ ALTER TABLE `sales`
   ADD CONSTRAINT `fk_sales_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`),
   ADD CONSTRAINT `fk_sales_cashier` FOREIGN KEY (`business_id`,`cashier_membership_id`) REFERENCES `business_memberships` (`business_id`, `id`),
   ADD CONSTRAINT `fk_sales_customer` FOREIGN KEY (`business_id`,`customer_id`) REFERENCES `customers` (`business_id`, `id`),
-  ADD CONSTRAINT `fk_sales_location` FOREIGN KEY (`business_id`,`location_id`) REFERENCES `business_locations` (`business_id`, `id`);
+  ADD CONSTRAINT `fk_sales_location` FOREIGN KEY (`business_id`,`location_id`) REFERENCES `business_locations` (`business_id`, `id`),
+  ADD CONSTRAINT `fk_sales_tax` FOREIGN KEY (`tax_id`) REFERENCES `taxes` (`id`);
+
+--
+-- Constraints for table `taxes`
+--
+ALTER TABLE `taxes`
+  ADD CONSTRAINT `fk_taxes_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `sale_items`

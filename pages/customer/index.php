@@ -10,6 +10,8 @@ requirePermission($conn, $_SESSION['membership_id'] ?? null, $_SESSION['active_b
 $businessId = $_SESSION['active_business_id'] ?? 0;
 $canCreateCustomer = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['create']);
 $canUpdateCustomer = hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
+$returnToSale = ($_GET['return_to'] ?? '') === 'sale';
+$openCustomerForm = $returnToSale && ($_GET['open'] ?? '') === 'add' && $canCreateCustomer;
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // Server side pagination
@@ -144,7 +146,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
     <div class="modal-header">
       <div class="modal-title">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
-        Add Customer
+        <?php echo $returnToSale ? 'Register Customer for Sale' : 'Add Customer'; ?>
       </div>
       <button type="button" class="modal-close-btn" onclick="closeAddModal()">✕</button>
     </div>
@@ -152,6 +154,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
       <div class="modal-body">
         <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
         <input type="hidden" name="action" value="create">
+        <?php if ($returnToSale): ?><input type="hidden" name="return_to" value="sale"><?php endif; ?>
 
         <div class="field" style="margin-bottom: 12px;">
           <label for="c_name">Customer Name <span style="color:var(--red);">*</span></label>
@@ -189,8 +192,8 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
         </div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn-sm" onclick="closeAddModal()">Cancel</button>
-        <button type="submit" class="btn-primary" id="addBtn">Save Customer</button>
+        <?php if ($returnToSale): ?><a class="btn-sm" style="text-decoration:none;" href="../sale/index?resume_sale=1<?php echo isset($_GET['role']) ? '&role='.rawurlencode((string)$_GET['role']) : ''; ?>">Back to sale</a><?php else: ?><button type="button" class="btn-sm" onclick="closeAddModal()">Cancel</button><?php endif; ?>
+        <button type="submit" class="btn-primary" id="addBtn"><?php echo $returnToSale ? 'Register and Return' : 'Save Customer'; ?></button>
       </div>
     </form>
   </div>
@@ -261,11 +264,13 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
 <?php endif; ?>
 
 <script>
+const returnToSaleUrl=<?php echo $returnToSale ? json_encode('../sale/index?resume_sale=1' . (isset($_GET['role']) ? '&role=' . rawurlencode((string)$_GET['role']) : '')) : 'null'; ?>;
 function openAddModal() {
   document.getElementById('addModalOverlay').style.display = 'flex';
 }
 
 function closeAddModal() {
+  if(returnToSaleUrl){window.location.href=returnToSaleUrl;return;}
   document.getElementById('addModalOverlay').style.display = 'none';
 }
 
@@ -304,6 +309,7 @@ document.getElementById('editCustForm')?.addEventListener('submit', function() {
   document.getElementById('updateBtn').style.opacity = '0.7';
   document.getElementById('updateBtn').textContent = 'Updating...';
 });
+<?php if ($openCustomerForm): ?>openAddModal();document.getElementById('c_name')?.focus();<?php endif; ?>
 </script>
 
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

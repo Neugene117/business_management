@@ -25,11 +25,17 @@ validateCsrfToken($_POST['csrf_token'] ?? '');
 
 $action = isset($_POST['action']) ? $_POST['action'] : '';
 $businessId = $_SESSION['active_business_id'];
-$role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
+$roleValue = isset($_GET['role']) ? (string)$_GET['role'] : '';
+$role_query = $roleValue !== '' ? '?role=' . rawurlencode($roleValue) : '';
 
 switch ($action) {
     case 'create':
         requirePermission($conn, $_SESSION['membership_id'], $businessId, $permissions['create']);
+
+        $returnToSale = ($_POST['return_to'] ?? '') === 'sale';
+        $createFailureUrl = $returnToSale
+            ? 'index.php?open=add&return_to=sale' . ($roleValue !== '' ? '&role=' . rawurlencode($roleValue) : '')
+            : 'index.php' . $role_query;
 
         $name = trim($_POST['name'] ?? '');
         $phone = trim($_POST['phone'] ?? NULL);
@@ -39,7 +45,7 @@ switch ($action) {
 
         if (empty($name)) {
             setFlashMessage('error', 'Customer name is required.');
-            header("Location: index.php" . $role_query);
+            header('Location: ' . $createFailureUrl);
             exit();
         }
 
@@ -90,13 +96,19 @@ switch ($action) {
                 );
 
                 setFlashMessage('success', 'Customer registered successfully.');
+                if ($returnToSale) {
+                    $saleQuery = ['resume_sale'=>'1', 'customer_id'=>(string)$customerId];
+                    if ($roleValue !== '') $saleQuery['role'] = $roleValue;
+                    header('Location: ../sale/index.php?' . http_build_query($saleQuery));
+                    exit();
+                }
             } else {
                 setFlashMessage('error', 'Failed to register customer.');
             }
 
             mysqli_stmt_close($stmt);
         }
-        header("Location: index.php" . $role_query);
+        header('Location: ' . $createFailureUrl);
         exit();
 
     case 'update':

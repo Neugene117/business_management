@@ -106,11 +106,15 @@ if ($purchaseId > 0) {
     }
 }
 $queryBase = array_filter(['status'=>$statusFilter,'search'=>$search,'role'=>getPreviewRole()], static fn($value) => $value !== null && $value !== '');
+if ((int)($_GET['purchase_id'] ?? 0) > 0) {
+    header('Location: view?' . http_build_query(array_merge($queryBase, ['id'=>(int)$_GET['purchase_id']])));
+    exit;
+}
 ?>
 
 <div class="receiving-page-head">
   <div><h1>Purchase Receiving</h1><p>Track ordered stock, post partial receipts, and complete purchase orders.</p></div>
-  <a class="btn-sm" href="../purchase/index.php<?php echo e($roleQuery); ?>">View Purchase Orders</a>
+  <a class="btn-sm" href="../purchase/index<?php echo e($roleQuery); ?>">View Purchase Orders</a>
 </div>
 
 <div class="receiving-summary">
@@ -142,7 +146,7 @@ $queryBase = array_filter(['status'=>$statusFilter,'search'=>$search,'role'=>get
           <td class="value-received"><?php echo formatCurrency($purchase['received_value'],$currency); ?></td>
           <td class="value-remaining"><?php echo formatCurrency($purchase['remaining_value'],$currency); ?></td>
           <td><span class="status-pill <?php echo $completed?'pill-green':'pill-amber'; ?>"><?php echo $completed?'Fully Received / Completed':'Pending'; ?></span><?php if(!$completed):?><small><?php echo $purchase['status']==='PARTIALLY_RECEIVED'?'Partially received':'Not received'; ?></small><?php endif;?></td>
-          <td class="receipt-actions"><a class="btn-sm <?php echo !$completed&&$canReceive?'receive-action':''; ?>" href="?<?php echo e(http_build_query(array_merge($queryBase,['purchase_id'=>(int)$purchase['id']]))); ?>"><?php echo $completed?'View':'Receive'; ?></a></td>
+          <td class="receipt-actions"><a class="btn-sm <?php echo !$completed&&$canReceive?'receive-action':''; ?>" href="view?<?php echo e(http_build_query(array_merge($queryBase,['id'=>(int)$purchase['id']]))); ?>"><?php echo $completed?'View Receiving Details':'Receive Purchase'; ?></a></td>
         </tr>
       <?php endwhile; endif; ?>
     </tbody>
@@ -153,14 +157,14 @@ $queryBase = array_filter(['status'=>$statusFilter,'search'=>$search,'role'=>get
 <?php if ($selectedPurchase): $isCompleted=$selectedPurchase['status']==='RECEIVED'; ?>
 <div class="modal-overlay" id="receivingModal" style="display:flex" aria-hidden="false">
   <div class="modal-content-card receiving-modal-card" role="dialog" aria-modal="true" aria-labelledby="receivingModalTitle">
-    <div class="modal-header"><div><div class="modal-title" id="receivingModalTitle"><?php echo $isCompleted?'Receiving Details':'Receive Purchase'; ?> &middot; <?php echo e($selectedPurchase['purchase_number']); ?></div><p><?php echo e($selectedPurchase['supplier_name'].' · '.$selectedPurchase['location_name']); ?></p></div><a class="modal-close-btn" href="index.php?<?php echo e(http_build_query($queryBase)); ?>" aria-label="Close">&times;</a></div>
+    <div class="modal-header"><div><div class="modal-title" id="receivingModalTitle"><?php echo $isCompleted?'Receiving Details':'Receive Purchase'; ?> &middot; <?php echo e($selectedPurchase['purchase_number']); ?></div><p><?php echo e($selectedPurchase['supplier_name'].' · '.$selectedPurchase['location_name']); ?></p></div><a class="modal-close-btn" href="index?<?php echo e(http_build_query($queryBase)); ?>" aria-label="Close">&times;</a></div>
     <div class="receipt-meta-grid">
       <div><span>Order Date</span><strong><?php echo e(formatDate($selectedPurchase['purchase_date'],$config['timezone'],'d M Y, H:i')); ?></strong></div>
       <div><span>Supplier Invoice</span><strong><?php echo e($selectedPurchase['supplier_invoice_number'] ?: 'Not recorded'); ?></strong></div>
       <div><span>Received Value</span><strong class="value-received"><?php echo formatCurrency($selectedPurchase['received_value'],$currency); ?></strong></div>
       <div><span>Remaining Value</span><strong class="value-remaining"><?php echo formatCurrency($selectedPurchase['remaining_value'],$currency); ?></strong></div>
     </div>
-    <?php if (!$isCompleted && $canReceive): ?><form action="../purchase/backend.php<?php echo e($roleQuery); ?>" method="POST" id="receivingForm"><?php endif; ?>
+    <?php if (!$isCompleted && $canReceive): ?><form action="../purchase/backend<?php echo e($roleQuery); ?>" method="POST" id="receivingForm"><?php endif; ?>
       <div class="modal-body receiving-modal-body">
         <?php if (!$isCompleted && $canReceive): ?>
           <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>"><input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken()); ?>"><input type="hidden" name="action" value="receive_po"><input type="hidden" name="return_to" value="receiving"><input type="hidden" name="purchase_id" value="<?php echo (int)$selectedPurchase['id']; ?>">
@@ -173,7 +177,7 @@ $queryBase = array_filter(['status'=>$statusFilter,'search'=>$search,'role'=>get
         </tbody></table></div>
         <?php if(!$isCompleted&&!$canReceive):?><div class="receiving-permission-note">You can view receiving information, but you do not have permission to post stock receipts.</div><?php endif;?>
       </div>
-      <div class="modal-footer"><a class="btn-sm" href="index.php?<?php echo e(http_build_query($queryBase)); ?>">Close</a><?php if(!$isCompleted&&$canReceive):?><button class="btn-primary" id="postReceiptButton">Post Stock Receipt</button><?php endif;?></div>
+      <div class="modal-footer"><a class="btn-sm" href="index?<?php echo e(http_build_query($queryBase)); ?>">Close</a><?php if(!$isCompleted&&$canReceive):?><button class="btn-primary" id="postReceiptButton">Post Stock Receipt</button><?php endif;?></div>
     <?php if (!$isCompleted && $canReceive): ?></form><?php endif; ?>
   </div>
 </div>

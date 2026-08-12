@@ -28,6 +28,76 @@ $businessId = (int)($_SESSION['active_business_id'] ?? 0);
 $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
 
 switch ($action) {
+    case 'create_tax':
+        requirePermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
+        $taxName = trim((string)($_POST['tax_name'] ?? ''));
+        $taxType = strtoupper(trim((string)($_POST['tax_type'] ?? '')));
+        $taxValueRaw = trim((string)($_POST['tax_value'] ?? ''));
+        $taxValue = is_numeric($taxValueRaw) ? (float)$taxValueRaw : -1;
+        $isActive = isset($_POST['is_active']) ? 1 : 0;
+        $nameLength = function_exists('mb_strlen') ? mb_strlen($taxName) : strlen($taxName);
+        if ($nameLength < 2 || $nameLength > 100) {
+            setFlashMessage('error', 'Enter a tax name between 2 and 100 characters.');
+            header('Location: index.php' . $role_query . '#tax-registration');
+            exit();
+        }
+        if (!in_array($taxType, ['PERCENTAGE', 'FIXED'], true) || $taxValue < 0 || ($taxType === 'PERCENTAGE' && $taxValue > 100)) {
+            setFlashMessage('error', 'Enter a valid percentage from 0 to 100 or a non-negative fixed amount.');
+            header('Location: index.php' . $role_query . '#tax-registration');
+            exit();
+        }
+        mysqli_begin_transaction($conn);
+        try {
+            if ($isActive) {
+                $disableStmt = mysqli_prepare($conn, 'UPDATE taxes SET is_active=0,updated_at=UTC_TIMESTAMP(6) WHERE business_id=? AND is_active=1');
+                mysqli_stmt_bind_param($disableStmt, 'i', $businessId);
+                mysqli_stmt_execute($disableStmt);
+            }
+            $insertStmt = mysqli_prepare($conn, 'INSERT INTO taxes (business_id,name,tax_type,tax_value,is_active,created_at,updated_at) VALUES (?,?,?,?,?,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))');
+            mysqli_stmt_bind_param($insertStmt, 'issdi', $businessId, $taxName, $taxType, $taxValue, $isActive);
+            if (!mysqli_stmt_execute($insertStmt)) throw new RuntimeException(mysqli_stmt_error($insertStmt));
+            $taxId = mysqli_insert_id($conn);
+            writeAuditLog($conn, $businessId, 'TAX_REGISTERED', 'tax', $taxId, ['name'=>$taxName,'tax_type'=>$taxType,'tax_value'=>$taxValue,'is_active'=>(bool)$isActive]);
+            mysqli_commit($conn);
+            setFlashMessage('success', $isActive ? 'Tax registered and activated for new sales.' : 'Tax registered as inactive.');
+        } catch (Throwable $error) {
+            mysqli_rollback($conn);
+            $duplicate = $error instanceof mysqli_sql_exception && $error->getCode() === 1062;
+            setFlashMessage('error', $duplicate ? 'A tax with this name is already registered.' : 'The tax could not be registered.');
+        }
+        header('Location: index.php' . $role_query . '#tax-registration');
+        exit();
+
+    case 'toggle_tax':
+        requirePermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['update']);
+        $taxId = (int)($_POST['tax_id'] ?? 0);
+        mysqli_begin_transaction($conn);
+        try {
+            $taxStmt = mysqli_prepare($conn, 'SELECT id,name,is_active FROM taxes WHERE id=? AND business_id=? LIMIT 1 FOR UPDATE');
+            mysqli_stmt_bind_param($taxStmt, 'ii', $taxId, $businessId);
+            mysqli_stmt_execute($taxStmt);
+            $tax = mysqli_fetch_assoc(mysqli_stmt_get_result($taxStmt));
+            if (!$tax) throw new RuntimeException('Tax registration not found.');
+            $activate = (int)$tax['is_active'] !== 1;
+            if ($activate) {
+                $disableStmt = mysqli_prepare($conn, 'UPDATE taxes SET is_active=0,updated_at=UTC_TIMESTAMP(6) WHERE business_id=? AND is_active=1');
+                mysqli_stmt_bind_param($disableStmt, 'i', $businessId);
+                mysqli_stmt_execute($disableStmt);
+            }
+            $newStatus = $activate ? 1 : 0;
+            $toggleStmt = mysqli_prepare($conn, 'UPDATE taxes SET is_active=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
+            mysqli_stmt_bind_param($toggleStmt, 'iii', $newStatus, $taxId, $businessId);
+            if (!mysqli_stmt_execute($toggleStmt)) throw new RuntimeException('Tax status could not be changed.');
+            writeAuditLog($conn, $businessId, $activate ? 'TAX_ACTIVATED' : 'TAX_DEACTIVATED', 'tax', $taxId, ['name'=>$tax['name']]);
+            mysqli_commit($conn);
+            setFlashMessage('success', $activate ? 'Tax activated for new sales.' : 'Tax deactivated. New sales will have no tax.');
+        } catch (Throwable $error) {
+            mysqli_rollback($conn);
+            setFlashMessage('error', $error->getMessage());
+        }
+        header('Location: index.php' . $role_query . '#tax-registration');
+        exit();
+
     case 'save_report_email_setting':
         requirePermission($conn, $_SESSION['membership_id'] ?? null, $businessId, 'settings.update');
         if (!isBusinessOwner()) {
@@ -288,7 +358,6 @@ switch ($action) {
         requirePermission($conn, $_SESSION['membership_id'], $businessId, $permissions['update']);
 
         $inventory_valuation_method = trim($_POST['inventory_valuation_method'] ?? 'WEIGHTED_AVERAGE');
-        $default_tax_rate = (float)($_POST['default_tax_rate'] ?? 0.0);
         $fiscal_year_start_month = (int)($_POST['fiscal_year_start_month'] ?? 1);
         $allow_negative_stock = isset($_POST['allow_negative_stock']) ? 1 : 0;
 
@@ -312,15 +381,15 @@ switch ($action) {
 
         $query = "
             UPDATE business_accounting_settings 
-            SET inventory_valuation_method = ?, default_tax_rate = ?, 
-                fiscal_year_start_month = ?, allow_negative_stock = ?, updated_at = NOW(6)
+            SET inventory_valuation_method = ?, fiscal_year_start_month = ?,
+                allow_negative_stock = ?, updated_at = NOW(6)
             WHERE business_id = ?
         ";
         $stmt = mysqli_prepare($conn, $query);
         mysqli_stmt_bind_param(
             $stmt,
-            'sdiii',
-            $inventory_valuation_method, $default_tax_rate,
+            'siii',
+            $inventory_valuation_method,
             $fiscal_year_start_month, $allow_negative_stock, $businessId
         );
 
@@ -360,7 +429,6 @@ switch ($action) {
             if (!mysqli_stmt_execute($stmt)) throw new RuntimeException('Failed to update accounting parameters.');
             writeAuditLog($conn, $businessId, 'BUSINESS_ACCOUNTING_SETTINGS_UPDATED', 'business', $businessId, [
                 'inventory_valuation_method' => $inventory_valuation_method,
-                'default_tax_rate' => $default_tax_rate,
                 'fiscal_year_start_month' => $fiscal_year_start_month,
                 'allow_negative_stock' => $allow_negative_stock
             ], $old);

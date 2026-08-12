@@ -21,6 +21,7 @@ $csrfToken = generateCsrfToken();
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../../src/css/login.css">
+<link rel="stylesheet" href="../../src/css/searchable-select.css">
 <style>
   .register-card {
     width: 100%;
@@ -160,7 +161,7 @@ $csrfToken = generateCsrfToken();
 
   <?php displayFlashMessage(); ?>
 
-  <form action="backend.php" method="POST" enctype="multipart/form-data" id="regForm">
+  <form action="backend" method="POST" enctype="multipart/form-data" id="regForm">
     <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
     <input type="hidden" name="action" value="register">
 
@@ -350,7 +351,7 @@ $csrfToken = generateCsrfToken();
   </form>
 
   <div class="form-footer" style="text-align: center; margin-top: 20px;">
-    Already have an account? <a href="../../login.php">Sign In</a>
+    Already have an account? <a href="../../login">Sign In</a>
   </div>
 </div>
 
@@ -383,7 +384,7 @@ function setupLiveValidation(inputId, fieldName, feedbackId) {
     feedback.textContent = 'Checking availability...';
 
     timer = setTimeout(function() {
-      fetch('check_unique.php?field=' + encodeURIComponent(fieldName) + '&value=' + encodeURIComponent(val))
+      fetch('check_unique?field=' + encodeURIComponent(fieldName) + '&value=' + encodeURIComponent(val))
         .then(res => res.json())
         .then(data => {
           if (data.available) {
@@ -466,5 +467,6 @@ document.getElementById('regForm').addEventListener('submit', function(e) {
   btn.querySelector('span').textContent = 'Submitting registration...';
 });
 </script>
+<script src="../../src/js/searchable-select.js"></script>
 </body>
 </html>

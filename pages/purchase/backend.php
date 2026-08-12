@@ -15,7 +15,7 @@ requireLogin();
 requireActiveBusiness($conn);
 $permissions = require __DIR__ . '/permissions.php';
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    header('Location: index.php');
+    header('Location: index');
     exit;
 }
 validateCsrfToken($_POST['csrf_token'] ?? '');
@@ -24,7 +24,18 @@ $action = (string)($_POST['action'] ?? '');
 $businessId = (int)$_SESSION['active_business_id'];
 $membershipId = (int)$_SESSION['membership_id'];
 $roleQuery = isset($_GET['role']) ? '?role=' . rawurlencode((string)$_GET['role']) : '';
-$returnPath = (string)($_POST['return_to'] ?? '') === 'receiving' ? '../receiving/index.php' : 'index.php';
+$requestedReturn = (string)($_POST['return_to'] ?? '');
+if ($requestedReturn === 'receiving') {
+    $returnPath = '../receiving/index';
+} elseif (preg_match('/^receiving_view:(\d+)$/', $requestedReturn, $receivingMatch)) {
+    $returnPath = '../receiving/view?id=' . (int)$receivingMatch[1];
+    $roleQuery = isset($_GET['role']) ? '&role=' . rawurlencode((string)$_GET['role']) : '';
+} elseif (preg_match('/^purchase_view:(\d+)$/', $requestedReturn, $returnMatch)) {
+    $returnPath = 'view?id=' . (int)$returnMatch[1];
+    $roleQuery = isset($_GET['role']) ? '&role=' . rawurlencode((string)$_GET['role']) : '';
+} else {
+    $returnPath = 'index';
+}
 $finish = static function (string $message, string $type = 'error') use ($roleQuery, $returnPath): void {
     setFlashMessage($type, $message);
     header('Location: ' . $returnPath . $roleQuery);
@@ -44,16 +55,35 @@ try {
         $unitCosts = is_array($_POST['unit_costs'] ?? null) ? $_POST['unit_costs'] : [];
         $unitSellingPrices = is_array($_POST['unit_selling_prices'] ?? null) ? $_POST['unit_selling_prices'] : [];
         $expiryDates = is_array($_POST['expiry_dates'] ?? null) ? $_POST['expiry_dates'] : [];
+        $settlementType = strtoupper(trim((string)($_POST['settlement_type'] ?? 'DEBT')));
+        $paymentMethod = strtoupper(trim((string)($_POST['payment_method'] ?? 'CASH')));
+        $paymentPhone = trim((string)($_POST['payment_phone'] ?? '')) ?: null;
+        $bankName = trim((string)($_POST['bank_name'] ?? '')) ?: null;
+        $bankAccountNumber = trim((string)($_POST['bank_account_number'] ?? '')) ?: null;
+        $paymentReference = trim((string)($_POST['payment_reference'] ?? '')) ?: null;
+        $paymentNotes = trim((string)($_POST['payment_notes'] ?? '')) ?: null;
         $idempotencyKey = trim((string)($_POST['idempotency_key'] ?? ''));
         if ($purchaseNumber === '' || $purchaseDateInput === '' || $supplierId <= 0 || $locationId <= 0 || !$productIds) {
             throw new InvalidArgumentException('PO number, date, supplier, target location, and at least one item are required.');
+        }
+        if (!in_array($settlementType, ['PAID','DEBT'], true)) throw new InvalidArgumentException('Select whether this purchase was paid or recorded as debt.');
+        $allowedPaymentMethods = ['CASH','MOBILE_MONEY','BANK_TRANSFER'];
+        if ($settlementType === 'PAID' && !in_array($paymentMethod, $allowedPaymentMethods, true)) throw new InvalidArgumentException('Select Cash, Phone, or Bank as the payment method.');
+        if ($settlementType === 'PAID' && $paymentMethod === 'MOBILE_MONEY' && $paymentPhone === null) throw new InvalidArgumentException('Enter the telephone number used for the phone payment.');
+        if ($settlementType === 'PAID' && $paymentMethod === 'BANK_TRANSFER' && ($bankName === null || $bankAccountNumber === null)) throw new InvalidArgumentException('Enter the bank name and bank account number.');
+        if ($settlementType === 'DEBT' || $paymentMethod === 'CASH') {
+            $paymentPhone = $bankName = $bankAccountNumber = null;
+        } elseif ($paymentMethod === 'MOBILE_MONEY') {
+            $bankName = $bankAccountNumber = null;
+        } elseif ($paymentMethod === 'BANK_TRANSFER') {
+            $paymentPhone = null;
         }
         $config = getBusinessInventoryConfig($conn, $businessId);
         $purchaseDate = businessLocalDateTimeToUtc($purchaseDateInput, $config['timezone']);
 
         mysqli_begin_transaction($conn);
         try {
-            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_CREATE', ['purchase_number'=>$purchaseNumber,'date'=>$purchaseDateInput,'supplier_id'=>$supplierId,'location_id'=>$locationId,'products'=>$productIds,'quantities'=>$quantities,'costs'=>$unitCosts,'selling_prices'=>$unitSellingPrices]);
+            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_CREATE', ['purchase_number'=>$purchaseNumber,'date'=>$purchaseDateInput,'supplier_id'=>$supplierId,'location_id'=>$locationId,'products'=>$productIds,'quantities'=>$quantities,'costs'=>$unitCosts,'selling_prices'=>$unitSellingPrices,'settlement_type'=>$settlementType,'payment_method'=>$settlementType==='PAID'?$paymentMethod:null,'payment_phone'=>$paymentPhone,'bank_name'=>$bankName,'bank_account_number'=>$bankAccountNumber]);
             $supplierStmt = mysqli_prepare($conn, 'SELECT id FROM suppliers WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
             mysqli_stmt_bind_param($supplierStmt, 'ii', $supplierId, $businessId);
             mysqli_stmt_execute($supplierStmt);
@@ -67,18 +97,13 @@ try {
             mysqli_stmt_execute($businessStmt);
             $business = mysqli_fetch_assoc(mysqli_stmt_get_result($businessStmt));
             if (!$business) throw new RuntimeException('The active company could not be found.');
-            $batchPrefix = preg_replace('/[^\p{L}\p{N}]+/u', '-', trim((string)$business['business_name']));
-            $batchPrefix = trim((string)$batchPrefix, '-');
-            if ($batchPrefix === '') $batchPrefix = 'COMPANY';
-            $batchPrefix = function_exists('mb_strtoupper') ? mb_strtoupper($batchPrefix, 'UTF-8') : strtoupper($batchPrefix);
-            $batchPrefix = function_exists('mb_substr') ? mb_substr($batchPrefix, 0, 45, 'UTF-8') : substr($batchPrefix, 0, 45);
             $duplicate = mysqli_prepare($conn, 'SELECT id FROM purchases WHERE business_id=? AND purchase_number=? FOR UPDATE');
             mysqli_stmt_bind_param($duplicate, 'is', $businessId, $purchaseNumber);
             mysqli_stmt_execute($duplicate);
             if (mysqli_fetch_assoc(mysqli_stmt_get_result($duplicate))) throw new RuntimeException('A purchase order with this number already exists.');
 
-            $purchaseStmt = mysqli_prepare($conn, "INSERT INTO purchases (business_id,location_id,supplier_id,purchase_number,status,purchase_date,notes,created_by_membership_id,created_at,updated_at) VALUES (?,?,?,?,'DRAFT',?,?,?,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))");
-            mysqli_stmt_bind_param($purchaseStmt, 'iiisssi', $businessId, $locationId, $supplierId, $purchaseNumber, $purchaseDate, $notes, $membershipId);
+            $purchaseStmt = mysqli_prepare($conn, "INSERT INTO purchases (business_id,location_id,supplier_id,purchase_number,status,purchase_date,payment_status,notes,created_by_membership_id,created_at,updated_at) VALUES (?,?,?,?,'DRAFT',?,?,?,?,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))");
+            mysqli_stmt_bind_param($purchaseStmt, 'iiissssi', $businessId, $locationId, $supplierId, $purchaseNumber, $purchaseDate, $settlementType, $notes, $membershipId);
             if (!mysqli_stmt_execute($purchaseStmt)) throw new RuntimeException('The purchase order could not be created.');
             $purchaseId = mysqli_insert_id($conn);
             $subtotal = 0.0;
@@ -102,9 +127,7 @@ try {
                     $expiryDate = trim((string)($expiryDates[$index] ?? '')) ?: null;
                     if ((int)$product['track_expiry'] === 1 && $expiryDate === null) throw new RuntimeException('Enter an expiry date for ' . $product['name'] . '.');
 
-                    // Batch numbers are server-generated from the company name.
-                    // Purchase ID + line position keeps each value stable and unique.
-                    $lotNumber = sprintf('%s-BATCH-%d-%d', $batchPrefix, $purchaseId, $index + 1);
+                    $lotNumber = generateUniqueCompanyBatchNumber($conn, $businessId, (string)$business['business_name']);
                     $batchInsert = mysqli_prepare($conn, 'INSERT INTO product_batches (business_id,product_id,lot_number,expires_at,created_at) VALUES (?,?,?,?,UTC_TIMESTAMP(6))');
                     mysqli_stmt_bind_param($batchInsert, 'iiss', $businessId, $productId, $lotNumber, $expiryDate);
                     if (!mysqli_stmt_execute($batchInsert)) throw new RuntimeException('The automatic product batch could not be created.');
@@ -119,12 +142,24 @@ try {
                 $validItems++;
             }
             if ($validItems === 0) throw new InvalidArgumentException('Add at least one valid purchase item.');
-            $totals = mysqli_prepare($conn, 'UPDATE purchases SET subtotal=?,total_amount=? WHERE id=? AND business_id=?');
-            mysqli_stmt_bind_param($totals, 'ddii', $subtotal, $subtotal, $purchaseId, $businessId);
+            $amountPaid = $settlementType === 'PAID' ? $subtotal : 0.0;
+            $totals = mysqli_prepare($conn, 'UPDATE purchases SET subtotal=?,total_amount=?,amount_paid=?,payment_status=? WHERE id=? AND business_id=?');
+            mysqli_stmt_bind_param($totals, 'dddsii', $subtotal, $subtotal, $amountPaid, $settlementType, $purchaseId, $businessId);
             mysqli_stmt_execute($totals);
-            writeAuditLog($conn, $businessId, 'PURCHASE_ORDER_CREATED', 'purchase', $purchaseId, ['purchase_number'=>$purchaseNumber,'total_amount'=>$subtotal,'items'=>$validItems]);
+            if ($settlementType === 'PAID') {
+                $paymentStmt = mysqli_prepare($conn, 'INSERT INTO purchase_payments (business_id,purchase_id,amount,payment_method,reference_number,phone_number,bank_name,bank_account_number,paid_at,recorded_by_membership_id,notes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6))');
+                mysqli_stmt_bind_param($paymentStmt, 'iidssssssis', $businessId, $purchaseId, $amountPaid, $paymentMethod, $paymentReference, $paymentPhone, $bankName, $bankAccountNumber, $purchaseDate, $membershipId, $paymentNotes);
+                if (!mysqli_stmt_execute($paymentStmt)) throw new RuntimeException('The purchase payment could not be recorded.');
+            }
+            writeAuditLog($conn, $businessId, 'PURCHASE_ORDER_CREATED', 'purchase', $purchaseId, ['purchase_number'=>$purchaseNumber,'total_amount'=>$subtotal,'items'=>$validItems,'payment_status'=>$settlementType,'payment_method'=>$settlementType==='PAID'?$paymentMethod:null]);
             completeIdempotencyKey($conn, $businessId, $idempotencyKey, 201, ['purchase_id'=>$purchaseId]);
             mysqli_commit($conn);
+            if ($requestedReturn === 'purchase_create') {
+                setFlashMessage('success', $settlementType === 'PAID' ? 'Purchase order and payment recorded successfully.' : 'Purchase order recorded as supplier debt.');
+                $viewRole = isset($_GET['role']) ? '&role=' . rawurlencode((string)$_GET['role']) : '';
+                header('Location: view?id=' . $purchaseId . $viewRole);
+                exit;
+            }
             $finish('Purchase order created in Draft.', 'success');
         } catch (Throwable $error) {
             mysqli_rollback($conn);

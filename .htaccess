@@ -1,7 +1,13 @@
 # Enable the Rewrite Engine
 RewriteEngine On
 
-# Rewrite to handle URLs without file extensions
+# Redirect legacy browser requests to their canonical extensionless URL.
+# THE_REQUEST prevents the internal rewrite below from causing a loop.
+RewriteCond %{REQUEST_METHOD} ^(?:GET|HEAD)$
+RewriteCond %{THE_REQUEST} \s/+(.+?)\.(?:php|html)(?:[?\s]) [NC]
+RewriteRule ^ /%1 [R=301,L,NE]
+
+# Internally resolve clean URLs to their PHP implementation.
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{REQUEST_FILENAME}\.php -f
 RewriteRule ^(.*)$ $1.php [NC,L]

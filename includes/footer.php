@@ -9,6 +9,7 @@ $root_prefix = getRootPrefix();
 
 <script src="<?php echo $root_prefix; ?>src/js/navbar.js"></script>
 <script src="<?php echo $root_prefix; ?>src/js/sidebar.js"></script>
+<script src="<?php echo $root_prefix; ?>src/js/searchable-select.js"></script>
 <?php if (isset($extra_js)): ?>
   <?php foreach ($extra_js as $js_file): ?>
     <script src="<?php echo $root_prefix; ?>src/js/<?php echo e($js_file); ?>"></script>
@@ -64,3 +65,11 @@ $root_prefix = getRootPrefix();
 <?php endif; ?>
 </body>
 </html>
+<?php
+// The shared header starts an output buffer. Canonicalize every rendered link
+// and form action centrally so new pages inherit clean URLs automatically.
+if (ob_get_level() > 0) {
+    $renderedPage = ob_get_clean();
+    echo cleanPageUrlsInHtml($renderedPage);
+}
+?>

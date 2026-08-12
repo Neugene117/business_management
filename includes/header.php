@@ -28,6 +28,7 @@ $root_prefix = getRootPrefix();
 <link rel="stylesheet" href="<?php echo $root_prefix; ?>src/css/dashboard.css">
 <link rel="stylesheet" href="<?php echo $root_prefix; ?>src/css/navbar.css">
 <link rel="stylesheet" href="<?php echo $root_prefix; ?>src/css/sidebar.css">
+<link rel="stylesheet" href="<?php echo $root_prefix; ?>src/css/searchable-select.css">
 <?php if (isset($extra_css)): ?>
   <?php foreach ($extra_css as $css_file): ?>
     <link rel="stylesheet" href="<?php echo $root_prefix; ?>src/css/<?php echo e($css_file); ?>">

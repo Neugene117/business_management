@@ -51,6 +51,13 @@ try {
 $salesPeriodStart = $period['start_utc'];
 $salesPeriodEnd = $period['end_utc'];
 
+// Sales Stock Flow is an automatic business-day view. It always opens at
+// 12:00 AM today and closes at 12:00 AM on the following day.
+$flowDate = $localNow->format('Y-m-d');
+$flowPeriod = getBusinessPeriodBounds($flowDate, $flowDate, $config['timezone']);
+$flowPeriodStart = $flowPeriod['start_utc'];
+$flowPeriodEnd = $flowPeriod['end_utc'];
+
 // Server side pagination
 $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $limit = 20;
@@ -93,6 +100,20 @@ mysqli_stmt_bind_param($cStmt, $types, ...$params);
 mysqli_stmt_execute($cStmt);
 $total_rows = mysqli_fetch_assoc(mysqli_stmt_get_result($cStmt))['total'] ?? 0;
 $total_pages = ceil($total_rows / $limit);
+
+$summaryQuery = "
+    SELECT
+        COALESCE(SUM(CASE WHEN s.status <> 'VOIDED' THEN s.total_amount ELSE 0 END),0) total_sales,
+        COALESCE(SUM(CASE WHEN s.status <> 'VOIDED' THEN s.tax_amount ELSE 0 END),0) total_tax,
+        COALESCE(SUM(CASE WHEN s.status <> 'VOIDED' THEN s.amount_paid ELSE 0 END),0) total_paid
+    FROM sales s
+    LEFT JOIN customers c ON s.customer_id = c.id
+    $where_clause
+";
+$summaryHistoryStmt = mysqli_prepare($conn, $summaryQuery);
+mysqli_stmt_bind_param($summaryHistoryStmt, $types, ...$params);
+mysqli_stmt_execute($summaryHistoryStmt);
+$historySummary = mysqli_fetch_assoc(mysqli_stmt_get_result($summaryHistoryStmt)) ?: [];
 
 // Fetch data
 $query = "
@@ -177,12 +198,13 @@ $cashiers_list = [];
 $cashierResult = mysqli_stmt_get_result($cashierStmt);
 while ($cashierRow = mysqli_fetch_assoc($cashierResult)) $cashiers_list[] = $cashierRow;
 
-// Fetch business tax settings
-$acctQ = "SELECT default_tax_rate FROM business_accounting_settings WHERE business_id = ? LIMIT 1";
-$aStmt = mysqli_prepare($conn, $acctQ);
-mysqli_stmt_bind_param($aStmt, 'i', $businessId);
-mysqli_stmt_execute($aStmt);
-$default_tax_rate = mysqli_fetch_assoc(mysqli_stmt_get_result($aStmt))['default_tax_rate'] ?? 0.0;
+$activeTax = $hasBusinessContext ? getActiveBusinessTax($conn, $businessId) : null;
+$activeTaxLabel = 'No tax applied';
+if ($activeTax) {
+    $activeTaxLabel = $activeTax['name'] . ($activeTax['tax_type'] === 'PERCENTAGE'
+        ? ' (' . rtrim(rtrim(number_format($activeTax['tax_value'], 4, '.', ''), '0'), '.') . '%)'
+        : ' (fixed amount)');
+}
 
 // Fetch business currency
 $bizQuery = "SELECT currency_code FROM businesses WHERE id = ? LIMIT 1";
@@ -205,7 +227,7 @@ $flowQuery = "
      ORDER BY p.name
 ";
 $flowStmt = mysqli_prepare($conn, $flowQuery);
-mysqli_stmt_bind_param($flowStmt, 'ssssi', $salesPeriodStart, $salesPeriodStart, $salesPeriodEnd, $salesPeriodEnd, $businessId);
+mysqli_stmt_bind_param($flowStmt, 'ssssi', $flowPeriodStart, $flowPeriodStart, $flowPeriodEnd, $flowPeriodEnd, $businessId);
 mysqli_stmt_execute($flowStmt);
 $flowResult = mysqli_stmt_get_result($flowStmt);
 
@@ -215,9 +237,14 @@ $canCreateSale = $hasBusinessContext && hasPermission($conn, $_SESSION['membersh
 $canVoidSale = $hasBusinessContext && hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['void']);
 $canRefundSale = $hasBusinessContext && hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, $permissions['refund']);
 $canOverridePrice = $hasBusinessContext && hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, 'products.update');
+$canRegisterCustomerFromSale = $hasBusinessContext
+    && !isRolePreviewActive()
+    && hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, 'customers.view')
+    && hasPermission($conn, $_SESSION['membership_id'] ?? null, $businessId, 'customers.create');
+$registerCustomerUrl = '../customer/index?open=add&return_to=sale' . ($role_query !== '' ? '&role=' . rawurlencode((string)getPreviewRole()) : '');
 $sectionQueryBase = ['from'=>$salesFrom, 'to'=>$salesTo, 'role'=>getPreviewRole()];
 $sectionQueryBase = array_filter($sectionQueryBase, static fn($value) => $value !== null && $value !== '');
-$flowSectionUrl = 'index.php?' . http_build_query(array_merge($sectionQueryBase, ['section'=>'flow']));
+$flowSectionUrl = 'index.php?' . http_build_query(array_filter(['section'=>'flow','role'=>getPreviewRole()], static fn($value) => $value !== null && $value !== ''));
 $historySectionUrl = 'index.php?' . http_build_query(array_merge($sectionQueryBase, ['section'=>'history']));
 $paginationParams = [
     'view'=>$viewFullHistory ? 'history' : null,'section'=>$viewFullHistory ? null : 'history','status'=>$status_filter ?: null,'search'=>$search ?: null,
@@ -250,26 +277,20 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
 
   <nav class="sales-section-switcher" aria-label="Sales sections">
     <a href="<?php echo e($flowSectionUrl); ?>" class="sales-section-link <?php echo $activeSalesSection === 'flow' ? 'active' : ''; ?>" <?php echo $activeSalesSection === 'flow' ? 'aria-current="page"' : ''; ?>>
-      <span class="sales-section-icon"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V9m6 10V5m6 14v-7m4 7H2"/></svg></span>
-      <span><strong>Sales Stock Flow</strong><small>Opening, stock out, and closing balances</small></span>
+      <span class="sales-section-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V9m6 10V5m6 14v-7m4 7H2"/></svg></span>
+      <span><strong>Stock Flow</strong><small>Today’s movement</small></span>
     </a>
     <a href="<?php echo e($historySectionUrl); ?>" class="sales-section-link <?php echo $activeSalesSection === 'history' ? 'active' : ''; ?>" <?php echo $activeSalesSection === 'history' ? 'aria-current="page"' : ''; ?>>
-      <span class="sales-section-icon"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v16H4zM8 9h8M8 13h8M8 17h5"/></svg></span>
-      <span><strong>Complete Sales History</strong><small>Invoices, customers, payments, and returns</small></span>
+      <span class="sales-section-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v16H4zM8 9h8M8 13h8M8 17h5"/></svg></span>
+      <span><strong>Sales History</strong><small>Invoices and returns</small></span>
     </a>
   </nav>
 
   <?php if ($activeSalesSection === 'flow'): ?>
   <div class="card sales-flow-card">
     <div class="card-header sales-card-header">
-      <div><div class="card-title">Sales Stock Flow</div><p>Opening, sales stock out, and closing inventory for the selected period. Returns are reflected in closing stock.</p></div>
-      <form method="GET" action="index.php" class="sales-period-filter">
-        <input type="hidden" name="section" value="flow">
-        <?php if (getPreviewRole() !== null): ?><input type="hidden" name="role" value="<?php echo e(getPreviewRole()); ?>"><?php endif; ?>
-        <label>From <input type="date" name="from" value="<?php echo e($salesFrom); ?>"></label>
-        <label>To <input type="date" name="to" value="<?php echo e($salesTo); ?>"></label>
-        <button class="btn-sm" type="submit">Apply</button>
-      </form>
+      <div><div class="card-title">Sales Stock Flow</div><p>Today’s opening, sales stock out, and closing inventory are calculated automatically from 12:00 AM to the following 12:00 AM.</p></div>
+      <div class="sales-auto-period" aria-label="Automatic sales opening period"><span>Automatic daily opening</span><strong><?php echo e($localNow->format('d M Y')); ?> &middot; 12:00 AM</strong></div>
     </div>
     <div class="sales-table-scroll sales-flow-scroll"><table class="data-table">
       <thead><tr><th>SKU</th><th>Product</th><th>Opening</th><th>Stock Out</th><th>Closing</th></tr></thead>
@@ -291,75 +312,80 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
   <?php endif; ?>
 
   <?php if ($activeSalesSection === 'history'): ?>
-  <div class="card">
-    <div class="card-header sales-history-header">
-      <div class="sales-history-heading">
-        <div><div class="card-title"><?php echo $viewFullHistory ? 'Full Sales History' : 'Complete Sales History'; ?></div><p class="sales-history-help"><?php echo $viewFullHistory ? 'Search invoices using detailed transaction filters.' : 'Recent invoices with customer, payment, return, and profit information.'; ?></p></div>
-        <?php if (!$viewFullHistory): ?><a class="btn-sm" href="index.php?view=history&from=<?php echo e($salesFrom); ?>&to=<?php echo e($salesTo); ?><?php echo $role_query !== '' ? '&role=' . e(getPreviewRole()) : ''; ?>">Advanced History</a><?php else: ?><a class="btn-sm" href="<?php echo e($historySectionUrl); ?>">Simple View</a><?php endif; ?>
-      </div>
-      <form method="GET" action="index.php" class="sales-history-filters">
+  <section class="sales-history-summary" aria-label="Sales history summary">
+    <article><span>Transactions</span><strong><?php echo number_format((int)$total_rows); ?></strong><small>Matching records</small></article>
+    <article><span>Sales total</span><strong><?php echo formatCurrency($historySummary['total_sales'] ?? 0, $bizCur); ?></strong><small>Excludes voided sales</small></article>
+    <article><span>Amount paid</span><strong><?php echo formatCurrency($historySummary['total_paid'] ?? 0, $bizCur); ?></strong><small>Recorded payments</small></article>
+    <article><span>Tax</span><strong><?php echo formatCurrency($historySummary['total_tax'] ?? 0, $bizCur); ?></strong><small>Included in total</small></article>
+  </section>
+
+  <div class="card sales-history-card">
+    <div class="sales-history-topbar">
+      <div><div class="card-title"><?php echo $viewFullHistory ? 'Advanced Sales History' : 'Sales History'; ?></div><p class="sales-history-help"><?php echo e($salesFrom); ?> to <?php echo e($salesTo); ?> &middot; <?php echo number_format((int)$total_rows); ?> transaction(s)</p></div>
+      <div class="sales-history-actions"><?php if (!$viewFullHistory): ?><a class="btn-sm advanced-history-button" href="index.php?view=history&from=<?php echo e($salesFrom); ?>&to=<?php echo e($salesTo); ?><?php echo $role_query !== '' ? '&role=' . e(getPreviewRole()) : ''; ?>">Advanced filters</a><?php else: ?><a class="btn-sm" href="<?php echo e($historySectionUrl); ?>">Simple view</a><?php endif; ?></div>
+    </div>
+
+    <?php if ($viewFullHistory): ?><details class="advanced-filter-panel" open><summary><span><strong>Filter transactions</strong><small>Narrow results by date, customer, product, location, cashier, payment, or status.</small></span><span class="filter-chevron">⌄</span></summary><?php endif; ?>
+      <form method="GET" action="index.php" class="sales-history-filters <?php echo $viewFullHistory ? 'advanced-filter-grid' : 'simple-filter-row'; ?>">
         <?php if ($viewFullHistory): ?><input type="hidden" name="view" value="history"><?php endif; ?>
         <?php if (!$viewFullHistory): ?><input type="hidden" name="section" value="history"><?php endif; ?>
         <?php if (isset($_GET['role'])): ?>
           <input type="hidden" name="role" value="<?php echo e($_GET['role']); ?>">
         <?php endif; ?>
         <?php if ($viewFullHistory): ?>
-          <label>From<input type="date" name="from" value="<?php echo e($salesFrom); ?>"></label>
-          <label>To<input type="date" name="to" value="<?php echo e($salesTo); ?>"></label>
-          <select name="customer_id"><option value="">All customers</option><?php foreach ($customers_list as $customer): ?><option value="<?php echo (int)$customer['id']; ?>" <?php echo $customerFilter === (int)$customer['id'] ? 'selected' : ''; ?>><?php echo e($customer['name']); ?></option><?php endforeach; ?></select>
-          <select name="product_id"><option value="">All products / SKUs</option><?php foreach ($products_list as $product): ?><option value="<?php echo (int)$product['id']; ?>" <?php echo $productFilter === (int)$product['id'] ? 'selected' : ''; ?>><?php echo e($product['name'] . ' (' . $product['sku'] . ')'); ?></option><?php endforeach; ?></select>
-          <select name="location_id"><option value="">All locations</option><?php foreach ($locations_list as $location): ?><option value="<?php echo (int)$location['id']; ?>" <?php echo $locationFilter === (int)$location['id'] ? 'selected' : ''; ?>><?php echo e($location['name']); ?></option><?php endforeach; ?></select>
-          <select name="cashier_id"><option value="">All cashiers</option><?php foreach ($cashiers_list as $cashier): ?><option value="<?php echo (int)$cashier['id']; ?>" <?php echo $cashierFilter === (int)$cashier['id'] ? 'selected' : ''; ?>><?php echo e($cashier['name']); ?></option><?php endforeach; ?></select>
-          <select name="payment_method"><option value="">All payments</option><?php foreach (['CASH','CARD','BANK_TRANSFER','MOBILE_MONEY','CHEQUE','CREDIT','OTHER'] as $method): ?><option value="<?php echo $method; ?>" <?php echo $paymentFilter === $method ? 'selected' : ''; ?>><?php echo e(str_replace('_', ' ', $method)); ?></option><?php endforeach; ?></select>
+          <label><span>From</span><input type="date" name="from" value="<?php echo e($salesFrom); ?>"></label>
+          <label><span>To</span><input type="date" name="to" value="<?php echo e($salesTo); ?>"></label>
+          <label><span>Customer</span><select name="customer_id"><option value="">All customers</option><?php foreach ($customers_list as $customer): ?><option value="<?php echo (int)$customer['id']; ?>" <?php echo $customerFilter === (int)$customer['id'] ? 'selected' : ''; ?>><?php echo e($customer['name']); ?></option><?php endforeach; ?></select></label>
+          <label><span>Product</span><select name="product_id"><option value="">All products / SKUs</option><?php foreach ($products_list as $product): ?><option value="<?php echo (int)$product['id']; ?>" <?php echo $productFilter === (int)$product['id'] ? 'selected' : ''; ?>><?php echo e($product['name'] . ' (' . $product['sku'] . ')'); ?></option><?php endforeach; ?></select></label>
+          <label><span>Location</span><select name="location_id"><option value="">All locations</option><?php foreach ($locations_list as $location): ?><option value="<?php echo (int)$location['id']; ?>" <?php echo $locationFilter === (int)$location['id'] ? 'selected' : ''; ?>><?php echo e($location['name']); ?></option><?php endforeach; ?></select></label>
+          <label><span>Cashier</span><select name="cashier_id"><option value="">All cashiers</option><?php foreach ($cashiers_list as $cashier): ?><option value="<?php echo (int)$cashier['id']; ?>" <?php echo $cashierFilter === (int)$cashier['id'] ? 'selected' : ''; ?>><?php echo e($cashier['name']); ?></option><?php endforeach; ?></select></label>
+          <label><span>Payment</span><select name="payment_method"><option value="">All payment methods</option><?php foreach (['CASH','CARD','BANK_TRANSFER','MOBILE_MONEY','CHEQUE','CREDIT','OTHER'] as $method): ?><option value="<?php echo $method; ?>" <?php echo $paymentFilter === $method ? 'selected' : ''; ?>><?php echo e(ucwords(strtolower(str_replace('_', ' ', $method)))); ?></option><?php endforeach; ?></select></label>
         <?php else: ?>
           <input type="hidden" name="from" value="<?php echo e($salesFrom); ?>">
           <input type="hidden" name="to" value="<?php echo e($salesTo); ?>">
         <?php endif; ?>
-        <select name="status" style="padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--text); font-size:12px;">
+        <?php if ($viewFullHistory): ?><label><span>Status</span><?php endif; ?><select name="status">
           <option value="">All Statuses</option>
           <option value="COMPLETED" <?php echo ($status_filter === 'COMPLETED') ? 'selected' : ''; ?>>Completed</option>
           <option value="PARTIALLY_REFUNDED" <?php echo ($status_filter === 'PARTIALLY_REFUNDED') ? 'selected' : ''; ?>>Partially Refunded</option>
           <option value="REFUNDED" <?php echo ($status_filter === 'REFUNDED') ? 'selected' : ''; ?>>Refunded</option>
           <option value="VOIDED" <?php echo ($status_filter === 'VOIDED') ? 'selected' : ''; ?>>Voided</option>
-        </select>
-        <input type="text" name="search" placeholder="Search Sale Ref..." value="<?php echo e($search); ?>" style="padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--text); font-size:12px; min-width: 140px;">
-        <button class="btn-sm" type="submit">Filter</button>
-        <?php if ($viewFullHistory): ?><a class="btn-sm" href="index.php?view=history<?php echo $role_query !== '' ? '&role=' . e(getPreviewRole()) : ''; ?>">Clear</a><?php endif; ?>
+        </select><?php if ($viewFullHistory): ?></label><?php endif; ?>
+        <?php if ($viewFullHistory): ?><label class="filter-search"><span>Search</span><?php endif; ?><input type="search" name="search" placeholder="Invoice, customer, product, or SKU" value="<?php echo e($search); ?>"><?php if ($viewFullHistory): ?></label><?php endif; ?>
+        <div class="filter-actions"><button class="btn-primary" type="submit">Apply filters</button><?php if ($viewFullHistory): ?><a class="btn-sm" href="index.php?view=history<?php echo $role_query !== '' ? '&role=' . e(getPreviewRole()) : ''; ?>">Reset</a><?php endif; ?></div>
       </form>
-    </div>
+    <?php if ($viewFullHistory): ?></details><?php endif; ?>
 
     <div class="sales-table-scroll sales-history-scroll"><table class="data-table">
       <thead>
         <tr>
-          <th>Sale Number</th>
-          <th>Sold At</th>
+          <th>Invoice</th>
           <th>Customer</th>
-          <th>What Was Sold / Quantity / Selling Price</th>
+          <th>Items sold</th>
           <th>Location</th>
-          <th>Tax / Total</th>
-          <th>Profit / Loss</th>
+          <th>Amount</th>
+          <th>Profit</th>
           <th>Status</th>
-          <th style="text-align: right;">Action</th>
+          <th class="sales-row-actions">Actions</th>
         </tr>
       </thead>
       <tbody>
         <?php if (mysqli_num_rows($result) === 0): ?>
           <tr>
-            <td colspan="9" style="text-align: center; color: var(--text3); padding: 30px;">
+            <td colspan="8" style="text-align: center; color: var(--text3); padding: 30px;">
               No sales orders logged.
             </td>
           </tr>
         <?php else: ?>
           <?php while ($row = mysqli_fetch_assoc($result)): $displayProfit = ((float)$row['subtotal'] - (float)$row['returned_revenue']) - ((float)$row['total_cogs'] - (float)$row['returned_cogs']); ?>
             <tr>
-              <td><span class="code-badge"><?php echo e($row['sale_number']); ?></span></td>
-              <td><?php echo e(formatDate($row['sold_at'], $config['timezone'])); ?></td>
-              <td class="td-name"><?php echo e($row['customer_name'] ?? 'Walk-In Customer'); ?></td>
-              <td class="sales-items-cell"><?php echo nl2br(e($row['items_sold'] ?? 'No line items')); ?></td>
+              <td class="sale-reference"><strong><?php echo e($row['sale_number']); ?></strong><small><?php echo e(formatDate($row['sold_at'], $config['timezone'], 'd M Y · H:i')); ?></small></td>
+              <td class="td-name"><?php echo e($row['customer_name'] ?? 'Walk-In Customer'); ?><small><?php echo e(trim(($row['first_name'] ?? '') . ' ' . ($row['last_name'] ?? '')) ?: 'Unknown cashier'); ?></small></td>
+              <td class="sales-items-cell"><div class="sales-items-preview"><?php echo nl2br(e($row['items_sold'] ?? 'No line items')); ?></div></td>
               <td><span class="code-badge" style="background:var(--bg); border:1px solid var(--border);"><?php echo e($row['location_code']); ?></span></td>
-              <td>
-                <div style="font-size:10px; color:var(--text3);">Tax: <?php echo formatCurrency($row['tax_amount'], $bizCur); ?></div>
-                <div class="td-bold" style="color:var(--green);"><?php echo formatCurrency($row['total_amount'], $bizCur); ?></div>
+              <td class="sale-amount-cell">
+                <strong><?php echo formatCurrency($row['total_amount'], $bizCur); ?></strong>
+                <small><?php echo e($row['tax_name'] ?: 'Tax'); ?>: <?php echo formatCurrency($row['tax_amount'], $bizCur); ?></small>
               </td>
               <td class="td-bold" style="color:<?php echo $row['status'] === 'VOIDED' ? 'var(--text3)' : ($displayProfit >= 0 ? 'var(--green)' : 'var(--red)'); ?>;"><?php echo $row['status'] === 'VOIDED' ? 'Reversed' : formatCurrency(abs($displayProfit), $bizCur) . ($displayProfit >= 0 ? ' profit' : ' loss'); ?></td>
               <td>
@@ -373,11 +399,13 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
                   <span class="status-pill pill-red" style="opacity: 0.6;">Voided</span>
                 <?php endif; ?>
               </td>
-              <td style="text-align: right;">
-                <div style="display:inline-flex; gap: 4px;">
-                  <button class="btn-sm" onclick="viewDetails(<?php echo (int)$row['id']; ?>)">Invoice</button>
+              <td class="sales-row-actions">
+                <details class="sale-actions-menu">
+                  <summary aria-label="Open actions for <?php echo e($row['sale_number']); ?>">&bull;&bull;&bull;</summary>
+                  <div>
+                  <button type="button" onclick="viewDetails(<?php echo (int)$row['id']; ?>)">View invoice</button>
                   <?php if (in_array($row['status'], ['COMPLETED','PARTIALLY_REFUNDED'], true) && $canRefundSale): ?>
-                    <a class="btn-sm" href="?view=history&return_id=<?php echo (int)$row['id']; ?><?php echo $role_query !== '' ? '&role=' . e(getPreviewRole()) : ''; ?>">Return</a>
+                    <a href="?view=history&return_id=<?php echo (int)$row['id']; ?><?php echo $role_query !== '' ? '&role=' . e(getPreviewRole()) : ''; ?>">Record return</a>
                   <?php endif; ?>
                   
                   <?php if ($row['status'] === 'COMPLETED' && $canVoidSale): ?>
@@ -386,10 +414,11 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
                       <input type="hidden" name="action" value="void_sale">
                       <input type="hidden" name="sale_id" value="<?php echo (int)$row['id']; ?>">
                       <input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken()); ?>">
-                      <button type="submit" class="btn-action reject" style="font-size:10px; padding:3px 6px;">Void</button>
+                      <button type="submit" class="danger-menu-action">Void sale</button>
                     </form>
                   <?php endif; ?>
-                </div>
+                  </div>
+                </details>
               </td>
             </tr>
           <?php endwhile; ?>
@@ -399,9 +428,9 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
 
     <!-- Pagination links -->
     <?php if ($total_pages > 1): ?>
-      <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px; border-top: 1px solid var(--table-border);">
-        <span style="font-size:12px; color: var(--text3);">Showing page <?php echo $page; ?> of <?php echo $total_pages; ?> (<?php echo $total_rows; ?> entries)</span>
-        <div style="display: flex; gap: 4px;">
+      <div class="sales-pagination">
+        <span>Page <?php echo $page; ?> of <?php echo $total_pages; ?> &middot; <?php echo $total_rows; ?> entries</span>
+        <div>
           <?php if ($page > 1): ?>
             <a class="btn-sm" style="text-decoration:none;" href="index.php?<?php echo e(http_build_query(array_merge($paginationParams, ['page'=>$page - 1]))); ?>">Previous</a>
           <?php endif; ?>
@@ -423,36 +452,39 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
      ========================================== -->
 <?php if ($canCreateSale): ?>
 <div class="modal-overlay" id="addModalOverlay">
-  <div class="modal-content-card modal-lg">
+  <div class="modal-content-card modal-lg sales-entry-modal">
     <div class="modal-header">
       <div class="modal-title">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>
-        Record POS Customer Sale
+        Create sale
       </div>
       <button type="button" class="modal-close-btn" onclick="closeAddModal()">✕</button>
     </div>
     
-    <form action="backend.php<?php echo $role_query; ?>" method="POST" style="display:flex; flex-direction:column; flex:1;" id="addSaleForm">
-      <div class="modal-body">
+    <form action="backend.php<?php echo $role_query; ?>" method="POST" class="sales-entry-form" id="addSaleForm">
+      <div class="modal-body sale-form-body">
         <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
         <input type="hidden" name="action" value="create">
         <input type="hidden" name="idempotency_key" value="<?php echo e(createIdempotencyToken()); ?>">
 
-        <div class="field" style="margin-bottom: 12px;">
+        <section class="sale-form-section sale-details-section">
+          <div class="sale-form-section-title"><span>1</span><div><strong>Sale details</strong><small>Reference, customer, time, and stock location</small></div></div>
+          <div class="sale-form-grid">
+        <div class="field">
           <label for="s_num">Sale Number <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
             <input type="text" name="sale_number" id="s_num" value="SAL-<?php echo date('YmdHis'); ?>" required>
           </div>
         </div>
 
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label for="s_date">Sold At <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
             <input type="datetime-local" name="sold_at" id="s_date" value="<?php echo e($localNow->format('Y-m-d\TH:i')); ?>" required>
           </div>
         </div>
 
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label for="s_cust">Customer Account</label>
           <div class="field-wrap">
             <select name="customer_id" id="s_cust">
@@ -462,9 +494,12 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
               <?php endforeach; ?>
             </select>
           </div>
+          <?php if (!$customers_list && $canRegisterCustomerFromSale): ?>
+            <div class="sale-customer-empty"><span>No customers registered yet.</span><a href="<?php echo e($registerCustomerUrl); ?>" id="registerCustomerFromSale">+ Register customer</a></div>
+          <?php endif; ?>
         </div>
 
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field">
           <label for="s_loc">Source Location <span style="color:var(--red);">*</span></label>
           <div class="field-wrap">
             <select name="location_id" id="s_loc" required>
@@ -476,32 +511,34 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
           </div>
         </div>
 
-        <div class="field" style="margin-bottom: 12px;">
+        <div class="field sale-notes-field">
           <label for="s_notes">Sale Notes / Remarks</label>
           <div class="field-wrap">
             <input type="text" name="notes" id="s_notes" placeholder="e.g. cash reconciliation note">
           </div>
         </div>
+          </div>
+        </section>
 
         <!-- Line Items Section -->
-        <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <h4 style="font-size:11.5px; font-weight:600; text-transform:uppercase; color:var(--text3);">Sales Invoice Items</h4>
-            <button type="button" class="btn-sm" onclick="addItemRow()">+ Add Item</button>
+        <section class="sale-form-section sale-items-section">
+          <div class="sale-items-toolbar">
+            <div class="sale-form-section-title"><span>2</span><div><strong>Invoice items</strong><small>Add products, quantities, batches, and prices</small></div></div>
+            <button type="button" class="btn-sm sale-add-line" onclick="addItemRow()">+ Add item</button>
           </div>
           <div class="sale-item-headings" aria-hidden="true"><span>Product / available</span><span>Batch / lot</span><span>Quantity</span><span>Selling price<?php echo $canOverridePrice ? ' (editable)' : ''; ?></span><span></span></div>
           
-          <div id="itemsContainer" style="display:flex; flex-direction:column; gap:8px; max-height: 250px; overflow-y:auto; padding-right:4px;">
+          <div id="itemsContainer" class="sale-items-container">
             <!-- Dynamically added rows -->
           </div>
 
-          <div style="border-top:1px dashed var(--border); margin-top:12px; padding-top:10px; font-size:12px; display:flex; flex-direction:column; gap:4px;">
+          <div class="sale-totals-panel">
             <div style="display:flex; justify-content:space-between;">
               <span>Subtotal:</span>
               <span id="saleSubtotal">0.00 <?php echo e($bizCur); ?></span>
             </div>
             <div style="display:flex; justify-content:space-between;">
-              <span>Tax (<?php echo (float)($default_tax_rate * 100); ?>%):</span>
+              <span><?php echo e($activeTaxLabel); ?>:</span>
               <span id="saleTax">0.00 <?php echo e($bizCur); ?></span>
             </div>
             <div style="display:flex; justify-content:space-between; font-weight:700; font-size:13.5px; border-top:1px solid var(--border); padding-top:6px; margin-top:4px;">
@@ -509,18 +546,22 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
               <span id="saleTotal">0.00 <?php echo e($bizCur); ?></span>
             </div>
           </div>
-        </div>
+          <?php if (!$activeTax): ?><div class="sale-tax-note">No active tax is registered. This sale will be saved without tax.</div><?php endif; ?>
+        </section>
 
+        <section class="sale-form-section sale-payment-section">
+          <div class="sale-form-section-title"><span>3</span><div><strong>Payment</strong><small>Record how and when the customer paid</small></div></div>
         <div class="payment-grid">
           <div class="field"><label>Payment Method</label><div class="field-wrap"><select name="payment_method" id="paymentMethod" onchange="paymentMethodChanged()"><option>CASH</option><option>CARD</option><option>BANK_TRANSFER</option><option>MOBILE_MONEY</option><option>CHEQUE</option><option>CREDIT</option><option>OTHER</option></select></div></div>
           <div class="field"><label>Amount Paid</label><div class="field-wrap"><input type="number" min="0" step="0.0001" name="amount_paid" id="amountPaid" placeholder="Defaults to total"></div></div>
           <div class="field"><label>Reference Number</label><div class="field-wrap"><input type="text" name="payment_reference" maxlength="120" placeholder="Optional"></div></div>
           <div class="field"><label>Paid At</label><div class="field-wrap"><input type="datetime-local" name="paid_at" value="<?php echo e($localNow->format('Y-m-d\TH:i')); ?>"></div></div>
         </div>
+        </section>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn-sm" onclick="closeAddModal()">Cancel</button>
-        <button type="submit" class="btn-primary" id="submitBtn">Log POS Cash Sale</button>
+        <button type="submit" class="btn-primary" id="submitBtn">Complete sale</button>
       </div>
     </form>
   </div>
@@ -555,10 +596,16 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
 var productsList = <?php echo json_encode($products_list, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
 var batchesList = <?php echo json_encode($batches_list, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
 var stockList = <?php echo json_encode($stock_list, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
-var defaultTaxRate = <?php echo (float)$default_tax_rate; ?>;
+var activeTax = <?php echo json_encode($activeTax, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
 var bizCurCode = "<?php echo e($bizCur); ?>";
 var canOverridePrice = <?php echo $canOverridePrice ? 'true' : 'false'; ?>;
 var saleLocalDate = "<?php echo e($localNow->format('Y-m-d')); ?>";
+var itemRowSequence = 0;
+var saleDraftKey = "business-management:sale-draft:<?php echo (int)$businessId; ?>:<?php echo (int)($_SESSION['user_id'] ?? 0); ?>";
+var shouldResumeSale = <?php echo (($_GET['resume_sale'] ?? '') === '1') ? 'true' : 'false'; ?>;
+var newlyRegisteredCustomerId = <?php echo (int)($_GET['customer_id'] ?? 0); ?>;
+var saleWasCompleted = <?php echo (($_GET['sale_completed'] ?? '') === '1') ? 'true' : 'false'; ?>;
+var saleDraftTimer = null;
 
 // Add initial row only when the permission-protected form is rendered.
 if (document.getElementById('itemsContainer')) addItemRow();
@@ -571,9 +618,9 @@ function closeAddModal() {
   document.getElementById('addModalOverlay').style.display = 'none';
 }
 
-function addItemRow() {
+function addItemRow(itemData) {
   const container = document.getElementById('itemsContainer');
-  const index = container.children.length;
+  const index = itemRowSequence++;
   
   const div = document.createElement('div');
   div.className = 'item-row';
@@ -597,6 +644,14 @@ function addItemRow() {
   `;
   
   container.appendChild(div);
+  if (itemData) {
+    div.querySelector('.sale-product').value = String(itemData.product_id || '');
+    rowProductChanged(index);
+    div.querySelector('input[name="quantities[]"]').value = itemData.quantity || '';
+    div.querySelector('input[name="unit_prices[]"]').value = itemData.unit_price || '';
+    div.querySelector('.sale-batch').value = String(itemData.batch_id || '');
+    recalcTotals();
+  }
 }
 
 function removeItemRow(index) {
@@ -651,7 +706,12 @@ function recalcTotals() {
     subtotal += (qty * price);
   });
   
-  const tax = subtotal * defaultTaxRate;
+  let tax = 0;
+  if (activeTax) {
+    tax = activeTax.tax_type === 'PERCENTAGE'
+      ? subtotal * (parseFloat(activeTax.tax_value) / 100)
+      : parseFloat(activeTax.tax_value);
+  }
   const total = subtotal + tax;
 
   document.getElementById('saleSubtotal').textContent = subtotal.toFixed(2) + " " + bizCurCode;
@@ -666,6 +726,74 @@ function paymentMethodChanged() {
   if (method === 'CREDIT') paid.value = '0.0000';
   else if (parseFloat(paid.value || '0') === 0) paid.value = document.getElementById('addSaleForm').dataset.total || '';
 }
+
+function collectSaleDraft() {
+  const form = document.getElementById('addSaleForm');
+  if (!form) return null;
+  const value = function(name) { return form.elements[name]?.value || ''; };
+  return {
+    sale_number: value('sale_number'),
+    sold_at: value('sold_at'),
+    customer_id: value('customer_id'),
+    location_id: value('location_id'),
+    notes: value('notes'),
+    payment_method: value('payment_method'),
+    amount_paid: value('amount_paid'),
+    payment_reference: value('payment_reference'),
+    paid_at: value('paid_at'),
+    items: Array.from(document.querySelectorAll('#itemsContainer .item-row')).map(function(row) {
+      return {
+        product_id: row.querySelector('.sale-product')?.value || '',
+        batch_id: row.querySelector('.sale-batch')?.value || '',
+        quantity: row.querySelector('input[name="quantities[]"]')?.value || '',
+        unit_price: row.querySelector('input[name="unit_prices[]"]')?.value || ''
+      };
+    })
+  };
+}
+
+function saveSaleDraft() {
+  const draft = collectSaleDraft();
+  if (!draft) return;
+  try { sessionStorage.setItem(saleDraftKey, JSON.stringify(draft)); } catch (error) {}
+}
+
+function restoreSaleDraft() {
+  let draft = null;
+  try { draft = JSON.parse(sessionStorage.getItem(saleDraftKey) || 'null'); } catch (error) {}
+  if (!draft) return false;
+  const form = document.getElementById('addSaleForm');
+  if (!form) return false;
+  ['sale_number','sold_at','customer_id','location_id','notes','payment_method','amount_paid','payment_reference','paid_at'].forEach(function(name) {
+    if (form.elements[name] && draft[name] !== undefined) form.elements[name].value = draft[name];
+  });
+  const container = document.getElementById('itemsContainer');
+  container.replaceChildren();
+  const items = Array.isArray(draft.items) && draft.items.length ? draft.items : [null];
+  items.forEach(function(item) { addItemRow(item); });
+  if (newlyRegisteredCustomerId > 0 && form.elements.customer_id?.querySelector('option[value="' + newlyRegisteredCustomerId + '"]')) {
+    form.elements.customer_id.value = String(newlyRegisteredCustomerId);
+  }
+  recalcTotals();
+  return true;
+}
+
+const saleForm = document.getElementById('addSaleForm');
+if (saleWasCompleted) {
+  try { sessionStorage.removeItem(saleDraftKey); } catch (error) {}
+} else if (shouldResumeSale) {
+  restoreSaleDraft();
+  if (newlyRegisteredCustomerId > 0 && saleForm?.elements.customer_id?.querySelector('option[value="' + newlyRegisteredCustomerId + '"]')) {
+    saleForm.elements.customer_id.value = String(newlyRegisteredCustomerId);
+  }
+  openAddModal();
+}
+saleForm?.addEventListener('input', function() {
+  window.clearTimeout(saleDraftTimer);
+  saleDraftTimer = window.setTimeout(saveSaleDraft, 150);
+});
+saleForm?.addEventListener('change', saveSaleDraft);
+document.getElementById('registerCustomerFromSale')?.addEventListener('click', saveSaleDraft);
 
 // Close modals when clicking outside
 document.getElementById('addModalOverlay')?.addEventListener('click', function(e) {
@@ -689,16 +817,25 @@ function closeDetails() {
 
 // Safeguard double submissions client-side
 document.getElementById('addSaleForm')?.addEventListener('submit', function() {
+  saveSaleDraft();
   document.getElementById('submitBtn').disabled = true;
   document.getElementById('submitBtn').style.opacity = '0.7';
-  document.getElementById('submitBtn').textContent = 'Logging sale...';
+  document.getElementById('submitBtn').textContent = 'Completing sale...';
 });
 </script>
 
 <style>
 .sales-workspace{display:grid;gap:14px}.sales-context-notice{display:flex;align-items:center;gap:9px;padding:11px 14px;background:var(--card);border-radius:var(--radius);color:var(--text2);font-size:10.5px}.sales-context-notice strong{color:var(--text);white-space:nowrap}.sales-page-toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 20px;background:var(--card);border-radius:var(--radius)}.sales-page-toolbar h2{margin:2px 0 4px;font-size:20px;line-height:1.2;color:var(--text)}.sales-page-toolbar p{margin:0;color:var(--text3);font-size:11px}.sales-page-kicker{color:var(--green);font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}.sales-add-primary{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:40px;padding:9px 18px;white-space:nowrap;box-shadow:0 8px 20px rgba(0,0,0,.12)}.sales-section-switcher{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.sales-section-link{display:flex;align-items:center;gap:12px;min-height:72px;padding:14px 16px;background:var(--card);border-radius:var(--radius);color:var(--text);text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.04);transition:transform .18s ease,box-shadow .18s ease,background .18s ease}.sales-section-link:hover{transform:translateY(-1px);box-shadow:0 7px 18px rgba(0,0,0,.08)}.sales-section-link.active{background:var(--green);color:#fff;box-shadow:0 8px 20px rgba(0,0,0,.12)}.sales-section-link>span:last-child{display:grid;gap:3px}.sales-section-link strong{font-size:12.5px}.sales-section-link small{font-size:9.5px;color:var(--text3)}.sales-section-link.active small{color:rgba(255,255,255,.8)}.sales-section-icon{display:grid;place-items:center;flex:0 0 38px;width:38px;height:38px;border-radius:10px;background:var(--bg)}.sales-section-link.active .sales-section-icon{background:rgba(255,255,255,.16)}.sales-workspace .sales-flow-card{margin-bottom:0}.sales-history-header{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap}.sales-history-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sales-history-heading .btn-sm{text-decoration:none}
-.sales-flow-card{margin-bottom:14px;overflow:hidden}.sales-card-header{display:flex;justify-content:space-between;align-items:end;gap:14px;flex-wrap:wrap}.sales-card-header p,.sales-history-help{margin:5px 0 0;color:var(--text3);font-size:10px}.sales-period-filter,.sales-history-filters{display:flex;align-items:end;gap:8px;flex-wrap:wrap}.sales-period-filter label,.sales-history-filters label{display:flex;flex-direction:column;gap:4px;color:var(--text3);font-size:9px}.sales-period-filter input,.sales-history-filters input,.sales-history-filters select{min-height:32px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font-size:11px}.sales-history-filters{max-width:100%;justify-content:flex-end}.sales-table-scroll{overflow:auto}.sales-flow-scroll{max-height:330px}.sales-history-scroll{max-height:58vh}.sales-table-scroll table{min-width:680px}.sales-history-scroll table{min-width:1080px}.sales-table-scroll thead{position:sticky;top:0;z-index:2;background:var(--card)}.sales-stock-out{color:var(--red);font-weight:650}.sales-empty{padding:26px!important;text-align:center;color:var(--text3)}.sales-items-cell{min-width:250px;max-width:390px;white-space:normal;line-height:1.65;color:var(--text2)}.sale-item-headings{display:grid;grid-template-columns:minmax(190px,1.4fr) minmax(130px,1fr) 80px 110px 30px;gap:6px;margin:0 0 5px;color:var(--text3);font-size:9px;font-weight:600}.stock-hint{display:block;color:var(--text3);font-size:9px;margin-top:3px}.history-link{color:inherit;text-decoration:none}.history-link:hover{color:var(--green)}.payment-grid,.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.page-mode-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;padding:12px 14px;background:var(--card);border-radius:var(--radius)}.page-mode-bar strong,.page-mode-bar span{display:block}.page-mode-bar span{color:var(--text3);font-size:10px;margin-top:3px}.modal-form-scroll{display:flex;flex-direction:column;min-height:0;max-height:80vh}.modal-form-scroll .modal-body{overflow-y:auto}@media(max-width:760px){.sale-item-headings{display:none}.item-row{grid-template-columns:1fr 1fr!important}.item-row>div{grid-column:1/-1}.payment-grid,.form-grid{grid-template-columns:1fr}.sales-history-filters{justify-content:flex-start}}
+.sales-flow-card{margin-bottom:14px;overflow:hidden}.sales-card-header{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}.sales-card-header p,.sales-history-help{margin:5px 0 0;color:var(--text3);font-size:10px}.sales-auto-period{display:flex;flex-direction:column;align-items:flex-end;gap:4px;padding:9px 11px;border-radius:10px;background:var(--green-bg);white-space:nowrap}.sales-auto-period span{color:var(--green);font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.sales-auto-period strong{color:var(--text);font-size:10px}.sales-history-filters{display:flex;align-items:end;gap:8px;flex-wrap:wrap;max-width:100%;justify-content:flex-end}.sales-history-filters label{display:flex;flex-direction:column;gap:4px;color:var(--text3);font-size:9px}.sales-history-filters input,.sales-history-filters select{min-height:32px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font-size:11px}.sales-table-scroll{overflow:auto}.sales-flow-scroll{max-height:330px}.sales-history-scroll{max-height:58vh}.sales-table-scroll table{min-width:680px}.sales-history-scroll table{min-width:1080px}.sales-table-scroll thead{position:sticky;top:0;z-index:2;background:var(--card)}.sales-stock-out{color:var(--red);font-weight:650}.sales-empty{padding:26px!important;text-align:center;color:var(--text3)}.sales-items-cell{min-width:250px;max-width:390px;white-space:normal;line-height:1.65;color:var(--text2)}.sale-item-headings{display:grid;grid-template-columns:minmax(190px,1.4fr) minmax(130px,1fr) 80px 110px 30px;gap:6px;margin:0 0 5px;color:var(--text3);font-size:9px;font-weight:600}.stock-hint{display:block;color:var(--text3);font-size:9px;margin-top:3px}.history-link{color:inherit;text-decoration:none}.history-link:hover{color:var(--green)}.payment-grid,.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.page-mode-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;padding:12px 14px;background:var(--card);border-radius:var(--radius)}.page-mode-bar strong,.page-mode-bar span{display:block}.page-mode-bar span{color:var(--text3);font-size:10px;margin-top:3px}.modal-form-scroll{display:flex;flex-direction:column;min-height:0;max-height:80vh}.modal-form-scroll .modal-body{overflow-y:auto}@media(max-width:760px){.sale-item-headings{display:none}.item-row{grid-template-columns:1fr 1fr!important}.item-row>div{grid-column:1/-1}.payment-grid,.form-grid{grid-template-columns:1fr}.sales-history-filters{justify-content:flex-start}.sales-auto-period{align-items:flex-start;width:100%}}
+.sales-entry-modal.modal-lg{max-width:1040px;max-height:94vh}.sales-entry-form{background:var(--bg)}.sale-form-body{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(285px,.65fr);gap:14px;padding:16px!important;overflow-y:auto}.sale-form-section{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:0 5px 18px rgba(15,23,42,.035)}.sale-details-section,.sale-items-section{grid-column:1}.sale-payment-section{grid-column:2;grid-row:1 / span 2}.sale-form-section-title{display:flex;align-items:center;gap:10px;margin-bottom:14px}.sale-form-section-title>span{display:grid;place-items:center;width:27px;height:27px;border-radius:9px;background:var(--green);color:#fff;font-size:10px;font-weight:750}.sale-form-section-title strong,.sale-form-section-title small{display:block}.sale-form-section-title strong{font-size:12px;color:var(--text)}.sale-form-section-title small{margin-top:2px;color:var(--text3);font-size:9px}.sale-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.sale-notes-field{grid-column:1/-1}.sale-customer-empty{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:7px;padding:8px 9px;border-radius:9px;background:var(--orange-light);color:var(--text2);font-size:9px}.sale-customer-empty a{color:var(--orange);font-weight:700;text-decoration:none;white-space:nowrap}.sale-items-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}.sale-items-toolbar .sale-form-section-title{margin-bottom:10px}.sale-add-line{white-space:nowrap}.sale-items-container{display:flex;flex-direction:column;gap:9px;max-height:245px;overflow-y:auto;padding:2px 5px 2px 0}.item-row{padding:9px;border:1px solid var(--border);border-radius:10px;background:var(--bg)}.sale-totals-panel{width:min(100%,340px);margin:14px 0 0 auto;padding:13px 14px;border-radius:11px;background:var(--bg);display:flex;flex-direction:column;gap:7px;font-size:11px}.sale-totals-panel>div:last-child{color:var(--green)}.sale-tax-note{margin-top:9px;padding:9px 11px;border-radius:9px;background:var(--orange-light);color:var(--text2);font-size:9.5px}.sale-payment-section .payment-grid{grid-template-columns:1fr;margin-top:0}.sales-entry-modal .modal-footer{background:var(--card);box-shadow:0 -8px 20px rgba(15,23,42,.04)}@media(max-width:900px){.sale-form-body{grid-template-columns:1fr}.sale-details-section,.sale-items-section,.sale-payment-section{grid-column:1;grid-row:auto}.sale-payment-section .payment-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.sale-form-body{padding:10px!important}.sale-form-grid,.sale-payment-section .payment-grid{grid-template-columns:1fr}.sale-notes-field{grid-column:1}.sale-form-section{padding:12px}}
 @media(max-width:760px){.sales-page-toolbar{align-items:flex-start;padding:15px;flex-direction:column}.sales-add-primary{width:100%}.sales-section-switcher{grid-template-columns:1fr}.sales-section-link{min-height:64px}.sales-history-header{align-items:flex-start}.sales-history-filters{width:100%}}
+
+/* Streamlined sales workspace and history */
+.sales-workspace{max-width:1440px;margin:0 auto;gap:12px}.sales-page-toolbar{padding:16px 18px;border:1px solid var(--border);box-shadow:none}.sales-page-toolbar h2{font-size:19px}.sales-add-primary{box-shadow:none;border-radius:9px}.sales-section-switcher{display:flex;gap:4px;width:max-content;max-width:100%;padding:4px;border:1px solid var(--border);border-radius:11px;background:var(--card)}.sales-section-link{min-height:44px;padding:8px 12px;border-radius:8px;box-shadow:none;gap:8px}.sales-section-link:hover{transform:none;box-shadow:none;background:var(--bg)}.sales-section-link.active{box-shadow:none}.sales-section-link small{display:none}.sales-section-link strong{font-size:10.5px}.sales-section-icon{width:28px;height:28px;flex-basis:28px;border-radius:7px}.sales-history-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.sales-history-summary article{padding:13px 15px;border:1px solid var(--border);border-radius:11px;background:var(--card)}.sales-history-summary span,.sales-history-summary small{display:block;color:var(--text3);font-size:8.5px}.sales-history-summary span{text-transform:uppercase;letter-spacing:.06em;font-weight:650}.sales-history-summary strong{display:block;margin:7px 0 4px;color:var(--text);font-size:15px}.sales-history-card{overflow:visible;box-shadow:none;border:1px solid var(--border)}.sales-history-topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;border-bottom:1px solid var(--table-border)}.sales-history-actions{display:flex;gap:7px}.sales-history-actions a{text-decoration:none}.advanced-history-button{color:var(--green)!important;border-color:var(--green)!important}.simple-filter-row{display:grid;grid-template-columns:150px minmax(220px,340px) auto;justify-content:end;padding:11px 16px;border-bottom:1px solid var(--table-border);background:var(--bg)}.sales-history-filters select,.sales-history-filters input{width:100%;min-height:36px;padding:7px 9px;font:inherit;font-size:10px}.filter-actions{display:flex;align-items:end;gap:7px}.filter-actions .btn-primary{min-height:36px;padding:7px 13px;font-size:10px}.filter-actions a{display:inline-flex;align-items:center;min-height:36px;text-decoration:none}.advanced-filter-panel{margin:12px 14px;border:1px solid var(--border);border-radius:11px;background:var(--bg);overflow:hidden}.advanced-filter-panel>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;cursor:pointer;list-style:none}.advanced-filter-panel>summary::-webkit-details-marker{display:none}.advanced-filter-panel>summary strong,.advanced-filter-panel>summary small{display:block}.advanced-filter-panel>summary strong{font-size:10.5px}.advanced-filter-panel>summary small{margin-top:3px;color:var(--text3);font-size:8.5px}.filter-chevron{color:var(--text3);font-size:16px;transition:transform .2s}.advanced-filter-panel[open] .filter-chevron{transform:rotate(180deg)}.advanced-filter-grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));align-items:end;gap:10px;padding:13px 14px;border-top:1px solid var(--border);background:var(--card)}.advanced-filter-grid label{gap:5px}.advanced-filter-grid label>span{font-size:8.5px;font-weight:650;color:var(--text2)}.advanced-filter-grid .filter-search{grid-column:span 2}.advanced-filter-grid .filter-actions{grid-column:span 2;justify-content:flex-end}.sales-history-scroll{max-height:60vh;border-top:0}.sales-history-scroll table{min-width:980px}.sales-history-scroll th{padding-top:10px!important;padding-bottom:10px!important;font-size:8.5px!important}.sales-history-scroll td{padding-top:11px!important;padding-bottom:11px!important;vertical-align:middle}.sale-reference strong,.sale-reference small,.td-name small,.sale-amount-cell strong,.sale-amount-cell small{display:block}.sale-reference strong{font-size:10.5px;color:var(--text)}.sale-reference small,.td-name small,.sale-amount-cell small{margin-top:4px;color:var(--text3);font-size:8.5px;font-weight:400}.sale-amount-cell strong{color:var(--green);font-size:10.5px}.sales-items-cell{min-width:210px;max-width:310px;line-height:1.55;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.sales-row-actions{text-align:right!important;width:58px}.sale-actions-menu{position:relative;display:inline-block}.sale-actions-menu>summary{display:grid;place-items:center;width:32px;height:30px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text2);cursor:pointer;list-style:none;font-weight:700;letter-spacing:1px}.sale-actions-menu>summary::-webkit-details-marker{display:none}.sale-actions-menu[open]>summary{border-color:var(--border-hover);background:var(--bg)}.sale-actions-menu>div{position:absolute;z-index:20;right:0;top:35px;min-width:145px;padding:5px;border:1px solid var(--border);border-radius:9px;background:var(--card);box-shadow:0 12px 30px rgba(15,23,42,.16)}.sale-actions-menu a,.sale-actions-menu button{display:block;width:100%;padding:8px 9px;border:0;border-radius:6px;background:transparent;color:var(--text2);font:inherit;font-size:9.5px;text-align:left;text-decoration:none;cursor:pointer}.sale-actions-menu a:hover,.sale-actions-menu button:hover{background:var(--bg);color:var(--text)}.sale-actions-menu form{margin:0}.sale-actions-menu .danger-menu-action{color:var(--red)}.sales-pagination{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-top:1px solid var(--table-border);color:var(--text3);font-size:9.5px}.sales-pagination>div{display:flex;gap:4px}.sales-pagination a{text-decoration:none}.sales-flow-card{box-shadow:none;border:1px solid var(--border)}
+.sales-items-cell{display:table-cell}.sales-items-preview{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.sale-actions-menu[open]{min-width:150px}.sale-actions-menu>div{position:static;margin-top:5px}
+@media(max-width:980px){.advanced-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.advanced-filter-grid .filter-search,.advanced-filter-grid .filter-actions{grid-column:span 2}.sales-history-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:680px){.sales-section-switcher{width:100%;display:grid;grid-template-columns:1fr 1fr}.sales-section-link{justify-content:center}.sales-history-summary{grid-template-columns:1fr 1fr}.sales-history-topbar{align-items:flex-start;flex-direction:column}.simple-filter-row,.advanced-filter-grid{grid-template-columns:1fr;justify-content:stretch}.advanced-filter-grid .filter-search,.advanced-filter-grid .filter-actions{grid-column:1}.filter-actions{justify-content:flex-start}.sales-pagination{align-items:flex-start;flex-direction:column}.sales-auto-period{align-items:flex-start}.sales-history-summary article{padding:11px}.sales-history-summary strong{font-size:13px}}
 </style>
 
 <?php
@@ -805,7 +942,7 @@ if (isset($_GET['view_id'])):
           <span>${"<?php echo formatCurrency($sale['subtotal'], $bizCur); ?>"}</span>
         </div>
         <div style="display:flex; justify-content:space-between; width:220px;">
-          <span style="color:var(--text3);">VAT (Tax):</span>
+          <span style="color:var(--text3);"><?php echo e($sale['tax_name'] ?: 'Tax'); ?>:</span>
           <span>${"<?php echo formatCurrency($sale['tax_amount'], $bizCur); ?>"}</span>
         </div>
         <div style="display:flex; justify-content:space-between; width:220px; font-weight:700; font-size:14px; border-top:1px solid var(--border); padding-top:6px; margin-top:4px; color:var(--green);">

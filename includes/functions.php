@@ -332,6 +332,86 @@ function getBusinessInventoryConfig($conn, int $businessId): array {
     ];
 }
 
+/**
+ * Return the one tax currently enabled for a business.
+ *
+ * Tax values are stored as human-facing values: 18 means 18 percent and a
+ * fixed tax value is stored in the business currency.
+ */
+function getActiveBusinessTax($conn, int $businessId, bool $lockForShare = false): ?array {
+    $query = "SELECT id,name,tax_type,tax_value FROM taxes WHERE business_id=? AND is_active=1 ORDER BY id DESC LIMIT 1";
+    if ($lockForShare) {
+        $query .= ' LOCK IN SHARE MODE';
+    }
+    $stmt = mysqli_prepare($conn, $query);
+    if (!$stmt) {
+        throw new RuntimeException('Tax settings are unavailable. Apply the latest database migration.');
+    }
+    mysqli_stmt_bind_param($stmt, 'i', $businessId);
+    mysqli_stmt_execute($stmt);
+    $tax = mysqli_fetch_assoc(mysqli_stmt_get_result($stmt));
+    if (!$tax) {
+        return null;
+    }
+    return [
+        'id' => (int)$tax['id'],
+        'name' => (string)$tax['name'],
+        'tax_type' => (string)$tax['tax_type'],
+        'tax_value' => (float)$tax['tax_value']
+    ];
+}
+
+/** Calculate a sale-level tax from the active tax snapshot. */
+function calculateSaleTax(float $subtotal, ?array $tax): float {
+    if ($tax === null) {
+        return 0.0;
+    }
+    $value = max(0.0, (float)($tax['tax_value'] ?? 0));
+    if (($tax['tax_type'] ?? '') === 'PERCENTAGE') {
+        return round(max(0.0, $subtotal) * ($value / 100), 4);
+    }
+    return ($tax['tax_type'] ?? '') === 'FIXED' ? round($value, 4) : 0.0;
+}
+
+/**
+ * Allocate a sale-level tax to item rows so refunds retain their proportional
+ * tax value. The last item receives the rounding remainder.
+ */
+function allocateSaleTax(array $lineAmounts, float $totalTax): array {
+    if (!$lineAmounts) {
+        return [];
+    }
+    $totalTax = round(max(0.0, $totalTax), 4);
+    $subtotal = array_sum(array_map('floatval', $lineAmounts));
+    $allocations = [];
+    $allocated = 0.0;
+    $lastIndex = array_key_last($lineAmounts);
+    foreach ($lineAmounts as $index => $lineAmount) {
+        if ($index === $lastIndex) {
+            $lineTax = round($totalTax - $allocated, 4);
+        } elseif ($subtotal > 0) {
+            $lineTax = round($totalTax * ((float)$lineAmount / $subtotal), 4);
+            $allocated += $lineTax;
+        } else {
+            $lineTax = 0.0;
+        }
+        $allocations[$index] = max(0.0, $lineTax);
+    }
+    return $allocations;
+}
+
+/** Remove .php from navigable links and form targets in rendered HTML. */
+function cleanPageUrlsInHtml(string $html): string {
+    return preg_replace_callback(
+        '/\b(href|action)=(\"|\')([^\"\']+)\2/i',
+        static function (array $match): string {
+            $url = preg_replace('/\.(?:php|html)(?=([?#]|$))/i', '', $match[3]);
+            return $match[1] . '=' . $match[2] . $url . $match[2];
+        },
+        $html
+    ) ?? $html;
+}
+
 function businessLocalDateTimeToUtc(string $value, string $timezone): string {
     $value = trim($value);
     if ($value === '') {
@@ -354,6 +434,8 @@ function getBusinessPeriodBounds(string $fromDate, string $toDate, string $timez
         throw new InvalidArgumentException('Select a valid date range.');
     }
     $zone = new DateTimeZone($timezone);
+    // Business reporting days always open at 12:00 AM and close at 12:00 AM
+    // on the following day. No user-supplied time can alter these boundaries.
     $startLocal = new DateTimeImmutable($fromDate . ' 00:00:00', $zone);
     $endLocal = (new DateTimeImmutable($toDate . ' 00:00:00', $zone))->modify('+1 day');
     return [
@@ -361,6 +443,46 @@ function getBusinessPeriodBounds(string $fromDate, string $toDate, string $timez
         'end_utc' => $endLocal->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u'),
         'today_local' => (new DateTimeImmutable('now', $zone))->format('Y-m-d')
     ];
+}
+
+/** Build a short, URL-safe batch prefix from a company's registered name. */
+function getCompanyBatchPrefix(string $companyName): string {
+    $companyName = trim($companyName);
+    if (function_exists('iconv')) {
+        $transliterated = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $companyName);
+        if ($transliterated !== false && $transliterated !== '') {
+            $companyName = $transliterated;
+        }
+    }
+    $prefix = strtoupper((string)preg_replace('/[^A-Z0-9]+/i', '', $companyName));
+    // A fixed alphabetic fallback guarantees that every generated batch has
+    // both letters and numbers, even when the company name is numeric/symbols.
+    if ($prefix === '' || !preg_match('/[A-Z]/', $prefix)) {
+        $prefix = 'COMPANY' . $prefix;
+    }
+    return substr($prefix, 0, 18);
+}
+
+/**
+ * Generate a company-derived, company-wide unique batch number.
+ * Example: KIGALIRETAILHUB-BAT-20260812124530-A1F93C
+ */
+function generateUniqueCompanyBatchNumber($conn, int $businessId, string $companyName): string {
+    $prefix = getCompanyBatchPrefix($companyName);
+    $checkStmt = mysqli_prepare($conn, 'SELECT 1 FROM product_batches WHERE business_id=? AND lot_number=? LIMIT 1');
+    if (!$checkStmt) {
+        throw new RuntimeException('Batch number uniqueness could not be verified.');
+    }
+    for ($attempt = 0; $attempt < 10; $attempt++) {
+        $randomPart = strtoupper(bin2hex(random_bytes(4)));
+        $candidate = $prefix . '-BAT-' . gmdate('YmdHis') . '-' . $randomPart;
+        mysqli_stmt_bind_param($checkStmt, 'is', $businessId, $candidate);
+        mysqli_stmt_execute($checkStmt);
+        if (!mysqli_fetch_assoc(mysqli_stmt_get_result($checkStmt))) {
+            return $candidate;
+        }
+    }
+    throw new RuntimeException('A unique batch number could not be generated. Please try again.');
 }
 
 function createIdempotencyToken(): string {

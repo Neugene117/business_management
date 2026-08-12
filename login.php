@@ -199,7 +199,7 @@ $csrfToken = generateCsrfToken();
 
       <?php displayFlashMessage(); ?>
 
-      <form action="login.php" method="POST" id="loginForm">
+      <form action="login" method="POST" id="loginForm">
         <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
 
         <div class="field">
@@ -236,7 +236,7 @@ $csrfToken = generateCsrfToken();
       </form>
 
       <div class="form-footer">
-        Want to register a business? <a href="pages/business_registration/index.php">Register Business</a>
+        Want to register a business? <a href="pages/business_registration/index">Register Business</a>
       </div>
 
     </div>
