@@ -5,5 +5,6 @@ composer.phar
 
 *.sql
 !database/migrations/20260817_0007_product_packaging_and_transaction_units.sql
+!database/migrations/20260817_0008_automatic_purchase_batch_traceability.sql
 *.md
 /storage/reports/

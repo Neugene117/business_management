@@ -485,6 +485,105 @@ function generateUniqueCompanyBatchNumber($conn, int $businessId, string $compan
     throw new RuntimeException('A unique batch number could not be generated. Please try again.');
 }
 
+/** Generate a business-scoped sale number that is safe for display and storage. */
+function generateUniqueSaleNumber($conn, int $businessId): string {
+    $checkStmt = mysqli_prepare($conn, 'SELECT 1 FROM sales WHERE business_id=? AND sale_number=? LIMIT 1');
+    if (!$checkStmt) throw new RuntimeException('Sale number uniqueness could not be verified.');
+    for ($attempt = 0; $attempt < 10; $attempt++) {
+        $candidate = 'SAL-' . gmdate('Ymd-His') . '-' . strtoupper(bin2hex(random_bytes(3)));
+        mysqli_stmt_bind_param($checkStmt, 'is', $businessId, $candidate);
+        mysqli_stmt_execute($checkStmt);
+        if (!mysqli_fetch_assoc(mysqli_stmt_get_result($checkStmt))) return $candidate;
+    }
+    throw new RuntimeException('A unique sale number could not be generated. Refresh the page and try again.');
+}
+
+/**
+ * Reserve traceable stock for a sale using FEFO, with batch creation order as
+ * the fallback when no expiry date is available. The caller must already be
+ * inside the sale transaction; selected batch balance rows are locked here.
+ */
+function allocateInventoryBatchesForSale($conn, int $businessId, int $locationId, int $productId, float $quantity, string $saleDate): array {
+    $quantity = normalizeInventoryDecimal($quantity, 'Sale quantity');
+    if ($quantity <= 0) throw new InvalidArgumentException('Sale quantity must be greater than zero.');
+
+    $stmt = mysqli_prepare($conn, "SELECT pb.id batch_id,pb.expires_at,bib.available_quantity
+        FROM batch_inventory_balances bib
+        JOIN product_batches pb ON pb.id=bib.batch_id AND pb.business_id=bib.business_id
+        WHERE bib.business_id=? AND bib.location_id=? AND pb.product_id=?
+          AND bib.available_quantity>0
+          AND (pb.expires_at IS NULL OR pb.expires_at>=?)
+        ORDER BY pb.expires_at IS NULL,pb.expires_at,pb.created_at,pb.id
+        FOR UPDATE");
+    mysqli_stmt_bind_param($stmt, 'iiis', $businessId, $locationId, $productId, $saleDate);
+    mysqli_stmt_execute($stmt);
+
+    $remaining = $quantity;
+    $allocations = [];
+    $result = mysqli_stmt_get_result($stmt);
+    while ($remaining > 0.00005 && ($batch = mysqli_fetch_assoc($result))) {
+        $available = normalizeInventoryDecimal($batch['available_quantity'], 'Batch availability');
+        $allocated = min($remaining, $available);
+        if ($allocated <= 0) continue;
+        $allocations[] = ['batch_id'=>(int)$batch['batch_id'],'quantity'=>$allocated];
+        $remaining = normalizeInventoryDecimal($remaining - $allocated, 'Remaining sale allocation');
+    }
+    if ($remaining > 0.00005) {
+        throw new RuntimeException('Insufficient non-expired, batch-traceable stock is available for this sale. Receive purchased stock before trying again.');
+    }
+    return $allocations;
+}
+
+/**
+ * Allocate a return or void back to the exact batches used by its sale item.
+ * Completed previous returns are excluded so a batch cannot be restored twice.
+ */
+function allocateSaleItemBatchesForReturn($conn, int $businessId, int $saleItemId, float $quantity): array {
+    $quantity = normalizeInventoryDecimal($quantity, 'Return quantity');
+    if ($quantity <= 0) throw new InvalidArgumentException('Return quantity must be greater than zero.');
+
+    $soldStmt = mysqli_prepare($conn, "SELECT batch_id,SUM(-quantity_delta) sold_quantity,
+            SUM((-quantity_delta)*unit_cost)/NULLIF(SUM(-quantity_delta),0) unit_cost,
+            MIN(id) first_movement
+        FROM inventory_movements
+        WHERE business_id=? AND sale_item_id=? AND movement_type='SALE' AND quantity_delta<0
+        GROUP BY batch_id
+        ORDER BY first_movement");
+    mysqli_stmt_bind_param($soldStmt, 'ii', $businessId, $saleItemId);
+    mysqli_stmt_execute($soldStmt);
+    $soldResult = mysqli_stmt_get_result($soldStmt);
+
+    $returnedStmt = mysqli_prepare($conn, "SELECT sri.batch_id,SUM(sri.quantity) returned_quantity
+        FROM sale_return_items sri
+        JOIN sale_returns sr ON sr.id=sri.sale_return_id AND sr.business_id=sri.business_id
+        WHERE sri.business_id=? AND sri.sale_item_id=? AND sr.status='COMPLETED'
+        GROUP BY sri.batch_id");
+    mysqli_stmt_bind_param($returnedStmt, 'ii', $businessId, $saleItemId);
+    mysqli_stmt_execute($returnedStmt);
+    $returnedResult = mysqli_stmt_get_result($returnedStmt);
+    $returnedByBatch = [];
+    while ($row = mysqli_fetch_assoc($returnedResult)) {
+        $key = $row['batch_id'] === null ? 'none' : (string)(int)$row['batch_id'];
+        $returnedByBatch[$key] = (float)$row['returned_quantity'];
+    }
+
+    $remaining = $quantity;
+    $allocations = [];
+    while ($remaining > 0.00005 && ($row = mysqli_fetch_assoc($soldResult))) {
+        $batchId = $row['batch_id'] === null ? null : (int)$row['batch_id'];
+        $key = $batchId === null ? 'none' : (string)$batchId;
+        $available = max(0.0, (float)$row['sold_quantity'] - (float)($returnedByBatch[$key] ?? 0.0));
+        $allocated = min($remaining, $available);
+        if ($allocated <= 0) continue;
+        $allocations[] = ['batch_id'=>$batchId,'quantity'=>$allocated,'unit_cost'=>(float)$row['unit_cost']];
+        $remaining = normalizeInventoryDecimal($remaining - $allocated, 'Remaining return allocation');
+    }
+    if ($remaining > 0.00005) {
+        throw new RuntimeException('The original sale batch allocation does not cover this return quantity.');
+    }
+    return $allocations;
+}
+
 function createIdempotencyToken(): string {
     return bin2hex(random_bytes(24));
 }
@@ -675,12 +774,12 @@ function applyInventoryMovement($conn, array $movement): array {
     $unitCost = max(0.0, (float)$movement['unit_cost']);
     if ($quantityDelta == 0.0) throw new InvalidArgumentException('Inventory movement quantity cannot be zero.');
 
-    $productStmt = mysqli_prepare($conn, 'SELECT track_batches FROM products WHERE id=? AND business_id=? LIMIT 1');
+    $productStmt = mysqli_prepare($conn, 'SELECT p.track_batches,EXISTS(SELECT 1 FROM product_batches pb WHERE pb.business_id=p.business_id AND pb.product_id=p.id) has_batches FROM products p WHERE p.id=? AND p.business_id=? LIMIT 1');
     mysqli_stmt_bind_param($productStmt, 'ii', $productId, $businessId);
     mysqli_stmt_execute($productStmt);
     $product = mysqli_fetch_assoc(mysqli_stmt_get_result($productStmt));
     if (!$product) throw new RuntimeException('The inventory product is invalid.');
-    if ((int)$product['track_batches'] === 1 && $batchId === null) throw new RuntimeException('A batch/lot is required for this product.');
+    if (((int)$product['track_batches'] === 1 || (int)$product['has_batches'] === 1) && $batchId === null) throw new RuntimeException('A batch/lot is required for this product.');
 
     if ($batchId !== null) {
         $batchStmt = mysqli_prepare($conn, 'SELECT id FROM product_batches WHERE id=? AND business_id=? AND product_id=? LIMIT 1');

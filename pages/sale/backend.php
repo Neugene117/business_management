@@ -25,10 +25,14 @@ $action = (string)($_POST['action'] ?? '');
 $businessId = (int)$_SESSION['active_business_id'];
 $membershipId = (int)$_SESSION['membership_id'];
 $roleQuery = isset($_GET['role']) ? '?role=' . rawurlencode((string)$_GET['role']) : '';
-$redirect = static function (string $message, string $type = 'error', string $suffix = '') use ($roleQuery): void {
+$redirect = static function (string $message, string $type = 'error', string $suffix = '') use ($roleQuery, &$action): void {
     setFlashMessage($type, $message);
-    $separator = $roleQuery !== '' && $suffix !== '' ? '&' : '';
-    header('Location: index.php' . $roleQuery . $separator . $suffix);
+    $createError = $type === 'error' && $action === 'create';
+    $target = $createError ? 'create.php' : 'index.php';
+    if ($createError && $suffix === '') $suffix = 'resume_sale=1';
+    $targetUrl = $target . $roleQuery;
+    if ($suffix !== '') $targetUrl .= ($roleQuery !== '' ? '&' : '?') . $suffix;
+    header('Location: ' . $targetUrl);
     exit;
 };
 
@@ -36,7 +40,9 @@ try {
     if ($action === 'create') {
         requirePermission($conn, $membershipId, $businessId, $permissions['create']);
 
-        $saleNumber = trim((string)($_POST['sale_number'] ?? ''));
+        $idempotencyKey = trim((string)($_POST['idempotency_key'] ?? ''));
+        $pendingSale = $_SESSION['pending_sale_numbers'][$idempotencyKey] ?? null;
+        $saleNumber = is_array($pendingSale) ? trim((string)($pendingSale['number'] ?? '')) : '';
         $soldAtInput = trim((string)($_POST['sold_at'] ?? ''));
         $locationId = (int)($_POST['location_id'] ?? 0);
         $customerId = !empty($_POST['customer_id']) ? (int)$_POST['customer_id'] : null;
@@ -45,15 +51,15 @@ try {
         $saleUomIds = is_array($_POST['sale_uom_ids'] ?? null) ? $_POST['sale_uom_ids'] : [];
         $quantities = is_array($_POST['quantities'] ?? null) ? $_POST['quantities'] : [];
         $unitPrices = is_array($_POST['unit_prices'] ?? null) ? $_POST['unit_prices'] : [];
-        $batchIds = is_array($_POST['batch_ids'] ?? null) ? $_POST['batch_ids'] : [];
         $paymentMethod = strtoupper(trim((string)($_POST['payment_method'] ?? 'CASH')));
         $amountPaidInput = trim((string)($_POST['amount_paid'] ?? ''));
         $paymentReference = trim((string)($_POST['payment_reference'] ?? '')) ?: null;
         $paidAtInput = trim((string)($_POST['paid_at'] ?? $soldAtInput));
-        $idempotencyKey = trim((string)($_POST['idempotency_key'] ?? ''));
-
-        if ($saleNumber === '' || $soldAtInput === '' || $locationId <= 0 || !$productIds) {
-            throw new InvalidArgumentException('Sale number, date, source location, and at least one item are required.');
+        if ($saleNumber === '') {
+            throw new RuntimeException('The generated sale number expired. Refresh the sale page and try again.');
+        }
+        if ($soldAtInput === '' || $locationId <= 0 || !$productIds) {
+            throw new InvalidArgumentException('Date, source location, and at least one item are required.');
         }
         if (!in_array($paymentMethod, ['CASH','CARD','BANK_TRANSFER','MOBILE_MONEY','CHEQUE','CREDIT','OTHER'], true)) {
             throw new InvalidArgumentException('Select a valid payment method.');
@@ -70,7 +76,7 @@ try {
             claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'SALE_COMPLETION', [
                 'sale_number'=>$saleNumber,'sold_at'=>$soldAtInput,'location_id'=>$locationId,
                 'customer_id'=>$customerId,'products'=>$productIds,'sale_uom_ids'=>$saleUomIds,'quantities'=>$quantities,
-                'prices'=>$unitPrices,'batches'=>$batchIds,'payment_method'=>$paymentMethod
+                'prices'=>$unitPrices,'payment_method'=>$paymentMethod
             ]);
 
             $locationStmt = mysqli_prepare($conn, 'SELECT id FROM business_locations WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
@@ -114,10 +120,9 @@ try {
                 $saleUomId = (int)($saleUomIds[$index] ?? 0);
                 $saleQuantity = normalizeInventoryDecimal($quantities[$index] ?? 0, 'Sale quantity');
                 $submittedPrice = normalizeInventoryDecimal($unitPrices[$index] ?? 0, 'Sale unit price');
-                $batchId = !empty($batchIds[$index]) ? (int)$batchIds[$index] : null;
                 if ($productId <= 0 || $saleQuantity <= 0) continue;
 
-                $productStmt = mysqli_prepare($conn, 'SELECT id,name,sku,uom_id,uom,package_uom_id,units_per_package,package_sale_price,sale_price,cost_price,track_batches,track_expiry FROM products WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
+                $productStmt = mysqli_prepare($conn, 'SELECT id,name,sku,uom_id,uom,package_uom_id,units_per_package,package_sale_price,sale_price,cost_price FROM products WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
                 mysqli_stmt_bind_param($productStmt, 'ii', $productId, $businessId);
                 mysqli_stmt_execute($productStmt);
                 $product = mysqli_fetch_assoc(mysqli_stmt_get_result($productStmt));
@@ -139,34 +144,26 @@ try {
                 }
                 $price = convertTransactionUnitPriceToBase($saleUnitPrice, $conversionFactor, 'Sale unit price');
 
-                if ((int)$product['track_batches'] === 1) {
-                    if ($batchId === null) throw new RuntimeException('Select a batch/lot for ' . $product['name'] . '.');
-                    $batchStmt = mysqli_prepare($conn, 'SELECT id,lot_number,expires_at FROM product_batches WHERE id=? AND business_id=? AND product_id=? LIMIT 1');
-                    mysqli_stmt_bind_param($batchStmt, 'iii', $batchId, $businessId, $productId);
-                    mysqli_stmt_execute($batchStmt);
-                    $batch = mysqli_fetch_assoc(mysqli_stmt_get_result($batchStmt));
-                    if (!$batch) throw new RuntimeException('The selected batch is invalid for ' . $product['name'] . '.');
-                    if ((int)$product['track_expiry'] === 1 && $batch['expires_at'] !== null && $batch['expires_at'] < $saleLocalDate) {
-                        throw new RuntimeException('Expired batch ' . $batch['lot_number'] . ' cannot be sold.');
-                    }
-                } else {
-                    $batchId = null;
-                }
-
                 $balance = lockInventoryBalance($conn, $businessId, $locationId, $productId);
                 if (!(int)$config['allow_negative_stock'] && (float)$balance['available_quantity'] + 0.00005 < $quantity) {
                     throw new RuntimeException('Insufficient stock for ' . $product['name'] . '. Requested: ' . number_format($quantity, 4, '.', '') . '; Available: ' . number_format((float)$balance['available_quantity'], 4, '.', ''));
                 }
-
-                $fifo = null;
+                $batchAllocations = allocateInventoryBatchesForSale($conn, $businessId, $locationId, $productId, $quantity, $saleLocalDate);
+                $costAllocations = [];
                 if ($config['inventory_valuation_method'] === 'FIFO') {
-                    $fifo = consumeFifoCost($conn, $businessId, $locationId, $productId, $quantity, $batchId);
-                    $unitCost = $fifo['unit_cost'];
-                    $cogs = $fifo['total_cost'];
+                    $cogs = 0.0;
+                    foreach ($batchAllocations as $allocationIndex => $batchAllocation) {
+                        $fifo = consumeFifoCost($conn, $businessId, $locationId, $productId, (float)$batchAllocation['quantity'], (int)$batchAllocation['batch_id']);
+                        $batchAllocations[$allocationIndex]['unit_cost'] = (float)$fifo['unit_cost'];
+                        $cogs += (float)$fifo['total_cost'];
+                        foreach ($fifo['allocations'] as $costAllocation) $costAllocations[] = $costAllocation;
+                    }
+                    $unitCost = $quantity > 0 ? $cogs / $quantity : 0.0;
                 } else {
                     $unitCost = (float)$balance['average_unit_cost'];
                     if ($unitCost <= 0) $unitCost = (float)$product['cost_price'];
                     $cogs = $quantity * $unitCost;
+                    foreach ($batchAllocations as $allocationIndex => $batchAllocation) $batchAllocations[$allocationIndex]['unit_cost'] = $unitCost;
                 }
 
                 $netSales = $quantity * $price;
@@ -174,25 +171,28 @@ try {
                     ? calculateSaleTax($netSales, $activeTax)
                     : 0.0;
                 $lineTotal = $netSales + $lineTax;
+                $storedBatchId = count($batchAllocations) === 1 ? (int)$batchAllocations[0]['batch_id'] : null;
                 $itemStmt = mysqli_prepare($conn, 'INSERT INTO sale_items (business_id,sale_id,product_id,batch_id,sale_uom_id,sale_quantity,conversion_factor_to_base,sale_unit_price,quantity,unit_price,discount_amount,tax_amount,net_sales_amount,line_total,unit_cost_at_sale,cogs_total,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,UTC_TIMESTAMP(6))');
-                mysqli_stmt_bind_param($itemStmt, 'iiiiidddddddddd', $businessId, $saleId, $productId, $batchId, $saleUomId, $saleQuantity, $conversionFactor, $saleUnitPrice, $quantity, $price, $lineTax, $netSales, $lineTotal, $unitCost, $cogs);
+                mysqli_stmt_bind_param($itemStmt, 'iiiiidddddddddd', $businessId, $saleId, $productId, $storedBatchId, $saleUomId, $saleQuantity, $conversionFactor, $saleUnitPrice, $quantity, $price, $lineTax, $netSales, $lineTotal, $unitCost, $cogs);
                 if (!mysqli_stmt_execute($itemStmt)) throw new RuntimeException('A sale item could not be saved.');
                 $saleItemId = mysqli_insert_id($conn);
                 $saleLines[] = ['id'=>$saleItemId, 'net_sales'=>$netSales];
 
-                if ($fifo !== null) {
-                    foreach ($fifo['allocations'] as $allocation) {
+                if ($costAllocations) {
+                    foreach ($costAllocations as $allocation) {
                         $allocationStmt = mysqli_prepare($conn, 'INSERT INTO inventory_cost_allocations (business_id,sale_item_id,cost_layer_id,quantity,unit_cost,created_at) VALUES (?,?,?,?,?,UTC_TIMESTAMP(6))');
                         mysqli_stmt_bind_param($allocationStmt, 'iiidd', $businessId, $saleItemId, $allocation['layer_id'], $allocation['quantity'], $allocation['unit_cost']);
                         if (!mysqli_stmt_execute($allocationStmt)) throw new RuntimeException('FIFO cost allocation could not be saved.');
                     }
                 }
 
-                applyInventoryMovement($conn, [
-                    'business_id'=>$businessId,'location_id'=>$locationId,'product_id'=>$productId,'batch_id'=>$batchId,
-                    'movement_type'=>'SALE','quantity_delta'=>-$quantity,'unit_cost'=>$unitCost,'occurred_at'=>$soldAt,
-                    'sale_item_id'=>$saleItemId,'created_by_membership_id'=>$membershipId,'notes'=>$saleNumber,'config'=>$config
-                ]);
+                foreach ($batchAllocations as $batchAllocation) {
+                    applyInventoryMovement($conn, [
+                        'business_id'=>$businessId,'location_id'=>$locationId,'product_id'=>$productId,'batch_id'=>$batchAllocation['batch_id'],
+                        'movement_type'=>'SALE','quantity_delta'=>-(float)$batchAllocation['quantity'],'unit_cost'=>$batchAllocation['unit_cost'],'occurred_at'=>$soldAt,
+                        'sale_item_id'=>$saleItemId,'created_by_membership_id'=>$membershipId,'notes'=>$saleNumber . ' automatic batch allocation','config'=>$config
+                    ]);
+                }
                 $subtotal += $netSales;
                 $totalTax += $lineTax;
                 $totalCogs += $cogs;
@@ -237,6 +237,7 @@ try {
             ]);
             completeIdempotencyKey($conn, $businessId, $idempotencyKey, 201, ['sale_id'=>$saleId,'sale_number'=>$saleNumber]);
             mysqli_commit($conn);
+            unset($_SESSION['pending_sale_numbers'][$idempotencyKey]);
             $redirect('Sale completed and inventory updated.', 'success', 'sale_completed=1');
         } catch (Throwable $error) {
             mysqli_rollback($conn);
@@ -295,20 +296,22 @@ try {
                     ? ($quantity / (float)$item['quantity']) * (float)$item['tax_amount']
                     : 0.0;
                 $lineTotal = ($quantity * (float)$item['unit_price']) + $lineTaxRefund;
-                $returnItemStmt = mysqli_prepare($conn, 'INSERT INTO sale_return_items (business_id,sale_return_id,sale_item_id,product_id,batch_id,quantity,unit_price,unit_cost_at_sale,line_total) VALUES (?,?,?,?,?,?,?,?,?)');
-                mysqli_stmt_bind_param($returnItemStmt, 'iiiiidddd', $businessId, $returnId, $saleItemId, $item['product_id'], $item['batch_id'], $quantity, $item['unit_price'], $item['unit_cost_at_sale'], $lineTotal);
-                if (!mysqli_stmt_execute($returnItemStmt)) throw new RuntimeException('A returned item could not be saved.');
-                $returnItemId = mysqli_insert_id($conn);
-                if ($restock) {
-                    applyInventoryMovement($conn, [
-                        'business_id'=>$businessId,'location_id'=>$sale['location_id'],'product_id'=>$item['product_id'],'batch_id'=>$item['batch_id'],
-                        'movement_type'=>'SALE_RETURN','quantity_delta'=>$quantity,'unit_cost'=>$item['unit_cost_at_sale'],'occurred_at'=>$returnedAt,
-                        'sale_return_item_id'=>$returnItemId,'created_by_membership_id'=>$membershipId,'notes'=>$returnNumber . ' / ' . $sale['sale_number'],'config'=>$config
-                    ]);
-                    $restockedCount++;
-                } else {
-                    $refundOnlyCount++;
+                $batchAllocations = allocateSaleItemBatchesForReturn($conn, $businessId, $saleItemId, $quantity);
+                foreach ($batchAllocations as $batchAllocation) {
+                    $batchLineTotal = $quantity > 0 ? $lineTotal * ((float)$batchAllocation['quantity'] / $quantity) : 0.0;
+                    $returnItemStmt = mysqli_prepare($conn, 'INSERT INTO sale_return_items (business_id,sale_return_id,sale_item_id,product_id,batch_id,quantity,unit_price,unit_cost_at_sale,line_total) VALUES (?,?,?,?,?,?,?,?,?)');
+                    mysqli_stmt_bind_param($returnItemStmt, 'iiiiidddd', $businessId, $returnId, $saleItemId, $item['product_id'], $batchAllocation['batch_id'], $batchAllocation['quantity'], $item['unit_price'], $batchAllocation['unit_cost'], $batchLineTotal);
+                    if (!mysqli_stmt_execute($returnItemStmt)) throw new RuntimeException('A returned item could not be saved.');
+                    $returnItemId = mysqli_insert_id($conn);
+                    if ($restock) {
+                        applyInventoryMovement($conn, [
+                            'business_id'=>$businessId,'location_id'=>$sale['location_id'],'product_id'=>$item['product_id'],'batch_id'=>$batchAllocation['batch_id'],
+                            'movement_type'=>'SALE_RETURN','quantity_delta'=>$batchAllocation['quantity'],'unit_cost'=>$batchAllocation['unit_cost'],'occurred_at'=>$returnedAt,
+                            'sale_return_item_id'=>$returnItemId,'created_by_membership_id'=>$membershipId,'notes'=>$returnNumber . ' / ' . $sale['sale_number'] . ' automatic batch restoration','config'=>$config
+                        ]);
+                    }
                 }
+                if ($restock) $restockedCount++; else $refundOnlyCount++;
                 $refundAmount += $lineTotal;
                 $returnedCount++;
                 $returnUnits[] = ['product_id'=>(int)$item['product_id'],'selected_uom_id'=>(int)$item['sale_uom_id'],'selected_uom_code'=>$item['sale_uom'],'entered_quantity'=>$enteredQuantity,'conversion_factor_to_base'=>$factor,'base_quantity'=>$quantity,'normalized_base_price'=>(float)$item['unit_price']];
@@ -358,11 +361,14 @@ try {
             mysqli_stmt_execute($itemsStmt);
             $items = mysqli_stmt_get_result($itemsStmt);
             while ($item = mysqli_fetch_assoc($items)) {
-                applyInventoryMovement($conn, [
-                    'business_id'=>$businessId,'location_id'=>$sale['location_id'],'product_id'=>$item['product_id'],'batch_id'=>$item['batch_id'],
-                    'movement_type'=>'CORRECTION_IN','quantity_delta'=>$item['quantity'],'unit_cost'=>$item['unit_cost_at_sale'],'occurred_at'=>$occurredAt,
-                    'created_by_membership_id'=>$membershipId,'notes'=>'Void reversal for ' . $sale['sale_number'],'config'=>$config
-                ]);
+                $batchAllocations = allocateSaleItemBatchesForReturn($conn, $businessId, (int)$item['id'], (float)$item['quantity']);
+                foreach ($batchAllocations as $batchAllocation) {
+                    applyInventoryMovement($conn, [
+                        'business_id'=>$businessId,'location_id'=>$sale['location_id'],'product_id'=>$item['product_id'],'batch_id'=>$batchAllocation['batch_id'],
+                        'movement_type'=>'CORRECTION_IN','quantity_delta'=>$batchAllocation['quantity'],'unit_cost'=>$batchAllocation['unit_cost'],'occurred_at'=>$occurredAt,
+                        'created_by_membership_id'=>$membershipId,'notes'=>'Void batch reversal for ' . $sale['sale_number'],'config'=>$config
+                    ]);
+                }
             }
             $update = mysqli_prepare($conn, "UPDATE sales SET status='VOIDED',updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?");
             mysqli_stmt_bind_param($update, 'ii', $saleId, $businessId);

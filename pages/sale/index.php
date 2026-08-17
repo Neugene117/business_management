@@ -165,7 +165,7 @@ while ($lRow = mysqli_fetch_assoc($lResult)) {
 }
 
 // Fetch active products
-$prodQuery = "SELECT p.id,p.name,p.sku,p.uom_id,p.uom,p.sale_price,p.package_uom_id,p.units_per_package,p.package_sale_price,pu.code package_uom,p.track_batches,p.track_expiry FROM products p LEFT JOIN units_of_measure pu ON pu.id=p.package_uom_id WHERE p.business_id=? AND p.is_active=1 ORDER BY p.name";
+$prodQuery = "SELECT p.id,p.name,p.sku,p.uom_id,p.uom,p.sale_price,p.package_uom_id,p.units_per_package,p.package_sale_price,pu.code package_uom FROM products p LEFT JOIN units_of_measure pu ON pu.id=p.package_uom_id WHERE p.business_id=? AND p.is_active=1 ORDER BY p.name";
 $pStmt = mysqli_prepare($conn, $prodQuery);
 mysqli_stmt_bind_param($pStmt, 'i', $businessId);
 mysqli_stmt_execute($pStmt);
@@ -174,14 +174,6 @@ $pResult = mysqli_stmt_get_result($pStmt);
 while ($pRow = mysqli_fetch_assoc($pResult)) {
     $products_list[] = $pRow;
 }
-
-$batchQuery = "SELECT pb.id,pb.product_id,pb.lot_number,pb.expires_at,bib.location_id,bib.available_quantity FROM product_batches pb LEFT JOIN batch_inventory_balances bib ON bib.business_id=pb.business_id AND bib.batch_id=pb.id WHERE pb.business_id=? ORDER BY pb.product_id,pb.expires_at,pb.lot_number";
-$batchStmt = mysqli_prepare($conn, $batchQuery);
-mysqli_stmt_bind_param($batchStmt, 'i', $businessId);
-mysqli_stmt_execute($batchStmt);
-$batches_list = [];
-$batchResult = mysqli_stmt_get_result($batchStmt);
-while ($batchRow = mysqli_fetch_assoc($batchResult)) $batches_list[] = $batchRow;
 
 $stockQuery = 'SELECT product_id,location_id,available_quantity FROM inventory_balances WHERE business_id=?';
 $stockStmt = mysqli_prepare($conn, $stockQuery);
@@ -216,14 +208,15 @@ $bizCur = mysqli_fetch_assoc(mysqli_stmt_get_result($bStmt))['currency_code'] ??
 
 // Opening, stock out, and closing are calculated from the same ledger used by purchases and adjustments.
 $flowQuery = "
-    SELECT p.id, p.sku, p.name, p.uom,
+    SELECT p.id, p.sku, p.name, p.uom, p.units_per_package, pu.code package_uom,
            COALESCE(SUM(CASE WHEN m.occurred_at < ? THEN m.quantity_delta ELSE 0 END), 0) AS opening_stock,
            COALESCE(SUM(CASE WHEN m.occurred_at >= ? AND m.occurred_at < ? AND m.movement_type = 'SALE' AND EXISTS (SELECT 1 FROM sale_items vsi JOIN sales vs ON vs.id=vsi.sale_id AND vs.business_id=vsi.business_id WHERE vsi.id=m.sale_item_id AND vsi.business_id=m.business_id AND vs.status<>'VOIDED') THEN ABS(m.quantity_delta) ELSE 0 END), 0) AS stock_out,
            COALESCE(SUM(CASE WHEN m.occurred_at < ? THEN m.quantity_delta ELSE 0 END), 0) AS closing_stock
       FROM products p
+      LEFT JOIN units_of_measure pu ON pu.id=p.package_uom_id
       LEFT JOIN inventory_movements m ON m.business_id = p.business_id AND m.product_id = p.id
      WHERE p.business_id = ? AND p.deleted_at IS NULL
-     GROUP BY p.id, p.sku, p.name, p.uom
+     GROUP BY p.id, p.sku, p.name, p.uom, p.units_per_package, pu.code
      HAVING opening_stock <> 0 OR stock_out <> 0 OR closing_stock <> 0
      ORDER BY p.name
 ";
@@ -269,10 +262,10 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
       <p>Review stock flow or manage sales records from one focused workspace.</p>
     </div>
     <?php if ($canCreateSale): ?>
-      <button class="btn-primary sales-add-primary" type="button" onclick="openAddModal()">
+      <a class="btn-primary sales-add-primary" href="create.php<?php echo e($role_query); ?>">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        Add Sales
-      </button>
+        Create sale
+      </a>
     <?php endif; ?>
   </div>
 
@@ -304,7 +297,7 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
           <td class="td-name"><a class="history-link" href="../inventory/index.php?tab=product_history&product_id=<?php echo (int)$flow['id']; ?><?php echo $role_query !== '' ? '&role=' . e(getPreviewRole()) : ''; ?>"><?php echo e($flow['name']); ?></a></td>
           <td class="td-bold"><?php echo (float)$flow['opening_stock']; ?> <?php echo e($flow['uom']); ?></td>
           <td class="sales-stock-out">-<?php echo (float)$flow['stock_out']; ?> <?php echo e($flow['uom']); ?></td>
-          <td class="td-bold"><?php echo (float)$flow['closing_stock']; ?> <?php echo e($flow['uom']); ?></td>
+          <td class="td-bold sales-closing-stock"><strong><?php echo e(formatBaseInventoryAsPackages($flow['closing_stock'], $flow['uom'], $flow['package_uom'], $flow['units_per_package'])); ?> <span>remaining</span></strong><small><?php echo e(formatInventoryDecimal($flow['closing_stock']) . ' ' . $flow['uom'] . ' total stock'); ?></small></td>
         </tr>
       <?php endwhile; endif; ?>
       </tbody>
@@ -404,7 +397,7 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
                 <details class="sale-actions-menu">
                   <summary aria-label="Open actions for <?php echo e($row['sale_number']); ?>">&bull;&bull;&bull;</summary>
                   <div>
-                  <button type="button" onclick="viewDetails(<?php echo (int)$row['id']; ?>)">View invoice</button>
+                  <a href="invoice?id=<?php echo (int)$row['id']; ?><?php echo $role_query !== '' ? '&role=' . e(getPreviewRole()) : ''; ?>">View invoice</a>
                   <?php if (in_array($row['status'], ['COMPLETED','PARTIALLY_REFUNDED'], true) && $canRefundSale): ?>
                     <a href="?view=history&return_id=<?php echo (int)$row['id']; ?><?php echo $role_query !== '' ? '&role=' . e(getPreviewRole()) : ''; ?>">Record return</a>
                   <?php endif; ?>
@@ -451,7 +444,7 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
 <!-- ==========================================
      MODAL: LOG POS CUSTOMER SALE
      ========================================== -->
-<?php if ($canCreateSale): ?>
+<?php if (false): // Sale creation now lives on create.php. ?>
 <div class="modal-overlay" id="addModalOverlay">
   <div class="modal-content-card modal-lg sales-entry-modal">
     <div class="modal-header">
@@ -524,10 +517,10 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
         <!-- Line Items Section -->
         <section class="sale-form-section sale-items-section">
           <div class="sale-items-toolbar">
-            <div class="sale-form-section-title"><span>2</span><div><strong>Invoice items</strong><small>Add products, quantities, batches, and prices</small></div></div>
+            <div class="sale-form-section-title"><span>2</span><div><strong>Invoice items</strong><small>Add products, quantities, and prices. Stock batches are assigned automatically.</small></div></div>
             <button type="button" class="btn-sm sale-add-line" onclick="addItemRow()">+ Add item</button>
           </div>
-          <div class="sale-item-headings" aria-hidden="true"><span>Product / available</span><span>Batch / lot</span><span>Sale Unit</span><span>Quantity</span><span>Price / sale unit<?php echo $canOverridePrice ? ' (editable)' : ''; ?></span><span></span></div>
+          <div class="sale-item-headings" aria-hidden="true"><span>Product / available</span><span>Sale Unit</span><span>Quantity</span><span>Price / sale unit<?php echo $canOverridePrice ? ' (editable)' : ''; ?></span><span></span></div>
           
           <div id="itemsContainer" class="sale-items-container">
             <!-- Dynamically added rows -->
@@ -595,12 +588,10 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
 
 <script>
 var productsList = <?php echo json_encode($products_list, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
-var batchesList = <?php echo json_encode($batches_list, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
 var stockList = <?php echo json_encode($stock_list, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
 var activeTax = <?php echo json_encode($activeTax, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
 var bizCurCode = "<?php echo e($bizCur); ?>";
 var canOverridePrice = <?php echo $canOverridePrice ? 'true' : 'false'; ?>;
-var saleLocalDate = "<?php echo e($localNow->format('Y-m-d')); ?>";
 var itemRowSequence = 0;
 var saleDraftKey = "business-management:sale-draft:<?php echo (int)$businessId; ?>:<?php echo (int)($_SESSION['user_id'] ?? 0); ?>";
 var shouldResumeSale = <?php echo (($_GET['resume_sale'] ?? '') === '1') ? 'true' : 'false'; ?>;
@@ -612,11 +603,11 @@ var saleDraftTimer = null;
 if (document.getElementById('itemsContainer')) addItemRow();
 
 function openAddModal() {
-  document.getElementById('addModalOverlay').style.display = 'flex';
+  window.location.href = 'create.php?resume_sale=1<?php echo $role_query !== '' ? '&role=' . rawurlencode((string)getPreviewRole()) : ''; ?>';
 }
 
 function closeAddModal() {
-  document.getElementById('addModalOverlay').style.display = 'none';
+  window.location.href = 'index.php<?php echo $role_query; ?>';
 }
 
 function addItemRow(itemData) {
@@ -626,19 +617,18 @@ function addItemRow(itemData) {
   const div = document.createElement('div');
   div.className = 'item-row';
   div.style.display = 'grid';
-  div.style.gridTemplateColumns = 'minmax(175px,1.35fr) minmax(115px,.9fr) 85px 70px 105px 30px';
+  div.style.gridTemplateColumns = 'minmax(210px,1.6fr) 95px 85px minmax(120px,.8fr) 30px';
   div.style.gap = '6px';
   div.style.alignItems = 'center';
   div.id = 'row-' + index;
 
   let optionsHtml = '<option value="">-- Product --</option>';
   productsList.forEach(p => {
-    optionsHtml += `<option value="${p.id}" data-price="${p.sale_price}" data-batches="${p.track_batches}" data-uom="${p.uom}">${p.name} (${p.sku})</option>`;
+    optionsHtml += `<option value="${p.id}" data-price="${p.sale_price}" data-uom="${p.uom}">${p.name} (${p.sku})</option>`;
   });
 
   div.innerHTML = `
     <div><select class="sale-product" name="product_ids[]" required onchange="rowProductChanged(${index})" style="font-size:11.5px; padding:6px;width:100%">${optionsHtml}</select><small class="stock-hint">Select a location and product</small></div>
-    <select class="sale-batch" name="batch_ids[]" aria-label="Batch or lot" style="font-size:11.5px;padding:6px"><option value="">Not required</option></select>
     <select class="sale-uom" name="sale_uom_ids[]" required onchange="rowSaleUnitChanged(${index})" aria-label="Sale unit" style="font-size:11.5px;padding:6px"><option value="">Unit</option></select>
     <input type="number" name="quantities[]" min="0.0001" step="0.0001" placeholder="Qty" required oninput="recalcTotals()" style="font-size:11.5px; padding:6px;">
     <input type="number" name="unit_prices[]" min="0" step="0.0001" placeholder="Selling price" title="Defaults to the product selling price" aria-label="Selling price per unit" required oninput="recalcTotals()" style="font-size:11.5px; padding:6px;" ${canOverridePrice ? '' : 'readonly'}>
@@ -652,7 +642,6 @@ function addItemRow(itemData) {
     if(itemData.sale_uom_id){div.querySelector('.sale-uom').value=String(itemData.sale_uom_id);rowSaleUnitChanged(index);}
     div.querySelector('input[name="quantities[]"]').value = itemData.quantity || '';
     div.querySelector('input[name="unit_prices[]"]').value = itemData.unit_price || '';
-    div.querySelector('.sale-batch').value = String(itemData.batch_id || '');
     recalcTotals();
   }
 }
@@ -677,16 +666,6 @@ function rowProductChanged(index) {
   const stock = stockList.find(s => parseInt(s.product_id, 10) === productId && parseInt(s.location_id, 10) === locationId);
   const uomSelect=row.querySelector('.sale-uom');const previousUom=uomSelect.value;uomSelect.innerHTML='<option value="">Unit</option>';if(product){uomSelect.insertAdjacentHTML('beforeend',`<option value="${product.uom_id}">${product.uom}</option>`);if(product.package_uom_id)uomSelect.insertAdjacentHTML('beforeend',`<option value="${product.package_uom_id}">${product.package_uom}</option>`);uomSelect.value=Array.from(uomSelect.options).some(option=>option.value===previousUom)?previousUom:String(product.uom_id);}
   row.querySelector('.stock-hint').textContent = `Available: ${formatSaleStock(stock ? stock.available_quantity : 0,product)}`;
-  const batchSelect = row.querySelector('.sale-batch');
-  batchSelect.innerHTML = '<option value="">' + (product && parseInt(product.track_batches, 10) === 1 ? '-- Select batch --' : 'Not required') + '</option>';
-  if (product && parseInt(product.track_batches, 10) === 1) {
-    batchSelect.required = true;
-    batchesList.filter(b => parseInt(b.product_id, 10) === productId && parseInt(b.location_id || '0', 10) === locationId && parseFloat(b.available_quantity || '0') > 0 && (!b.expires_at || b.expires_at >= saleLocalDate)).forEach(b => {
-      batchSelect.insertAdjacentHTML('beforeend', `<option value="${b.id}">${b.lot_number} · ${formatSaleStock(b.available_quantity,product)} available${b.expires_at ? ' · exp ' + b.expires_at : ''}</option>`);
-    });
-  } else {
-    batchSelect.required = false;
-  }
   rowSaleUnitChanged(index);
 }
 
@@ -746,7 +725,6 @@ function collectSaleDraft() {
     items: Array.from(document.querySelectorAll('#itemsContainer .item-row')).map(function(row) {
       return {
         product_id: row.querySelector('.sale-product')?.value || '',
-        batch_id: row.querySelector('.sale-batch')?.value || '',
         sale_uom_id: row.querySelector('.sale-uom')?.value || '',
         quantity: row.querySelector('input[name="quantities[]"]')?.value || '',
         unit_price: row.querySelector('input[name="unit_prices[]"]')?.value || ''
@@ -807,9 +785,7 @@ document.getElementById('detailModalOverlay').addEventListener('click', function
 });
 
 function viewDetails(saleId) {
-  const urlParams = new URLSearchParams(window.location.search);
-  urlParams.set('view_id', saleId);
-  window.location.search = urlParams.toString();
+  window.location.href = 'invoice?id=' + encodeURIComponent(saleId) + <?php echo json_encode($role_query !== '' ? '&role=' . (string)getPreviewRole() : ''); ?>;
 }
 
 function closeDetails() {
@@ -829,7 +805,7 @@ document.getElementById('addSaleForm')?.addEventListener('submit', function() {
 
 <style>
 .sales-workspace{display:grid;gap:14px}.sales-context-notice{display:flex;align-items:center;gap:9px;padding:11px 14px;background:var(--card);border-radius:var(--radius);color:var(--text2);font-size:10.5px}.sales-context-notice strong{color:var(--text);white-space:nowrap}.sales-page-toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 20px;background:var(--card);border-radius:var(--radius)}.sales-page-toolbar h2{margin:2px 0 4px;font-size:20px;line-height:1.2;color:var(--text)}.sales-page-toolbar p{margin:0;color:var(--text3);font-size:11px}.sales-page-kicker{color:var(--green);font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}.sales-add-primary{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:40px;padding:9px 18px;white-space:nowrap;box-shadow:0 8px 20px rgba(0,0,0,.12)}.sales-section-switcher{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.sales-section-link{display:flex;align-items:center;gap:12px;min-height:72px;padding:14px 16px;background:var(--card);border-radius:var(--radius);color:var(--text);text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.04);transition:transform .18s ease,box-shadow .18s ease,background .18s ease}.sales-section-link:hover{transform:translateY(-1px);box-shadow:0 7px 18px rgba(0,0,0,.08)}.sales-section-link.active{background:var(--green);color:#fff;box-shadow:0 8px 20px rgba(0,0,0,.12)}.sales-section-link>span:last-child{display:grid;gap:3px}.sales-section-link strong{font-size:12.5px}.sales-section-link small{font-size:9.5px;color:var(--text3)}.sales-section-link.active small{color:rgba(255,255,255,.8)}.sales-section-icon{display:grid;place-items:center;flex:0 0 38px;width:38px;height:38px;border-radius:10px;background:var(--bg)}.sales-section-link.active .sales-section-icon{background:rgba(255,255,255,.16)}.sales-workspace .sales-flow-card{margin-bottom:0}.sales-history-header{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap}.sales-history-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sales-history-heading .btn-sm{text-decoration:none}
-.sales-flow-card{margin-bottom:14px;overflow:hidden}.sales-card-header{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}.sales-card-header p,.sales-history-help{margin:5px 0 0;color:var(--text3);font-size:10px}.sales-auto-period{display:flex;flex-direction:column;align-items:flex-end;gap:4px;padding:9px 11px;border-radius:10px;background:var(--green-bg);white-space:nowrap}.sales-auto-period span{color:var(--green);font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.sales-auto-period strong{color:var(--text);font-size:10px}.sales-history-filters{display:flex;align-items:end;gap:8px;flex-wrap:wrap;max-width:100%;justify-content:flex-end}.sales-history-filters label{display:flex;flex-direction:column;gap:4px;color:var(--text3);font-size:9px}.sales-history-filters input,.sales-history-filters select{min-height:32px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font-size:11px}.sales-table-scroll{overflow:auto}.sales-flow-scroll{max-height:330px}.sales-history-scroll{max-height:58vh}.sales-table-scroll table{min-width:680px}.sales-history-scroll table{min-width:1080px}.sales-table-scroll thead{position:sticky;top:0;z-index:2;background:var(--card)}.sales-stock-out{color:var(--red);font-weight:650}.sales-empty{padding:26px!important;text-align:center;color:var(--text3)}.sales-items-cell{min-width:250px;max-width:390px;white-space:normal;line-height:1.65;color:var(--text2)}.sale-item-headings{display:grid;grid-template-columns:minmax(190px,1.4fr) minmax(130px,1fr) 80px 110px 30px;gap:6px;margin:0 0 5px;color:var(--text3);font-size:9px;font-weight:600}.stock-hint{display:block;color:var(--text3);font-size:9px;margin-top:3px}.history-link{color:inherit;text-decoration:none}.history-link:hover{color:var(--green)}.payment-grid,.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.page-mode-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;padding:12px 14px;background:var(--card);border-radius:var(--radius)}.page-mode-bar strong,.page-mode-bar span{display:block}.page-mode-bar span{color:var(--text3);font-size:10px;margin-top:3px}.modal-form-scroll{display:flex;flex-direction:column;min-height:0;max-height:80vh}.modal-form-scroll .modal-body{overflow-y:auto}@media(max-width:760px){.sale-item-headings{display:none}.item-row{grid-template-columns:1fr 1fr!important}.item-row>div{grid-column:1/-1}.payment-grid,.form-grid{grid-template-columns:1fr}.sales-history-filters{justify-content:flex-start}.sales-auto-period{align-items:flex-start;width:100%}}
+.sales-flow-card{margin-bottom:14px;overflow:hidden}.sales-card-header{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}.sales-card-header p,.sales-history-help{margin:5px 0 0;color:var(--text3);font-size:10px}.sales-auto-period{display:flex;flex-direction:column;align-items:flex-end;gap:4px;padding:9px 11px;border-radius:10px;background:var(--green-bg);white-space:nowrap}.sales-auto-period span{color:var(--green);font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.sales-auto-period strong{color:var(--text);font-size:10px}.sales-history-filters{display:flex;align-items:end;gap:8px;flex-wrap:wrap;max-width:100%;justify-content:flex-end}.sales-history-filters label{display:flex;flex-direction:column;gap:4px;color:var(--text3);font-size:9px}.sales-history-filters input,.sales-history-filters select{min-height:32px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font-size:11px}.sales-table-scroll{overflow:auto}.sales-flow-scroll{max-height:330px}.sales-history-scroll{max-height:58vh}.sales-table-scroll table{min-width:680px}.sales-history-scroll table{min-width:1080px}.sales-table-scroll thead{position:sticky;top:0;z-index:2;background:var(--card)}.sales-stock-out{color:var(--red);font-weight:650}.sales-empty{padding:26px!important;text-align:center;color:var(--text3)}.sales-items-cell{min-width:250px;max-width:390px;white-space:normal;line-height:1.65;color:var(--text2)}.sale-item-headings{display:grid;grid-template-columns:minmax(210px,1.6fr) 95px 85px minmax(120px,.8fr) 30px;gap:6px;margin:0 0 5px;color:var(--text3);font-size:9px;font-weight:600}.stock-hint{display:block;color:var(--text3);font-size:9px;margin-top:3px}.history-link{color:inherit;text-decoration:none}.history-link:hover{color:var(--green)}.payment-grid,.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.page-mode-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;padding:12px 14px;background:var(--card);border-radius:var(--radius)}.page-mode-bar strong,.page-mode-bar span{display:block}.page-mode-bar span{color:var(--text3);font-size:10px;margin-top:3px}.modal-form-scroll{display:flex;flex-direction:column;min-height:0;max-height:80vh}.modal-form-scroll .modal-body{overflow-y:auto}@media(max-width:760px){.sale-item-headings{display:none}.item-row{grid-template-columns:1fr 1fr!important}.item-row>div{grid-column:1/-1}.payment-grid,.form-grid{grid-template-columns:1fr}.sales-history-filters{justify-content:flex-start}.sales-auto-period{align-items:flex-start;width:100%}}
 .sales-entry-modal.modal-lg{max-width:1040px;max-height:94vh}.sales-entry-form{background:var(--bg)}.sale-form-body{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(285px,.65fr);gap:14px;padding:16px!important;overflow-y:auto}.sale-form-section{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:0 5px 18px rgba(15,23,42,.035)}.sale-details-section,.sale-items-section{grid-column:1}.sale-payment-section{grid-column:2;grid-row:1 / span 2}.sale-form-section-title{display:flex;align-items:center;gap:10px;margin-bottom:14px}.sale-form-section-title>span{display:grid;place-items:center;width:27px;height:27px;border-radius:9px;background:var(--green);color:#fff;font-size:10px;font-weight:750}.sale-form-section-title strong,.sale-form-section-title small{display:block}.sale-form-section-title strong{font-size:12px;color:var(--text)}.sale-form-section-title small{margin-top:2px;color:var(--text3);font-size:9px}.sale-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.sale-notes-field{grid-column:1/-1}.sale-customer-empty{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:7px;padding:8px 9px;border-radius:9px;background:var(--orange-light);color:var(--text2);font-size:9px}.sale-customer-empty a{color:var(--orange);font-weight:700;text-decoration:none;white-space:nowrap}.sale-items-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}.sale-items-toolbar .sale-form-section-title{margin-bottom:10px}.sale-add-line{white-space:nowrap}.sale-items-container{display:flex;flex-direction:column;gap:9px;max-height:245px;overflow-y:auto;padding:2px 5px 2px 0}.item-row{padding:9px;border:1px solid var(--border);border-radius:10px;background:var(--bg)}.sale-totals-panel{width:min(100%,340px);margin:14px 0 0 auto;padding:13px 14px;border-radius:11px;background:var(--bg);display:flex;flex-direction:column;gap:7px;font-size:11px}.sale-totals-panel>div:last-child{color:var(--green)}.sale-tax-note{margin-top:9px;padding:9px 11px;border-radius:9px;background:var(--orange-light);color:var(--text2);font-size:9.5px}.sale-payment-section .payment-grid{grid-template-columns:1fr;margin-top:0}.sales-entry-modal .modal-footer{background:var(--card);box-shadow:0 -8px 20px rgba(15,23,42,.04)}@media(max-width:900px){.sale-form-body{grid-template-columns:1fr}.sale-details-section,.sale-items-section,.sale-payment-section{grid-column:1;grid-row:auto}.sale-payment-section .payment-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.sale-form-body{padding:10px!important}.sale-form-grid,.sale-payment-section .payment-grid{grid-template-columns:1fr}.sale-notes-field{grid-column:1}.sale-form-section{padding:12px}}
 @media(max-width:760px){.sales-page-toolbar{align-items:flex-start;padding:15px;flex-direction:column}.sales-add-primary{width:100%}.sales-section-switcher{grid-template-columns:1fr}.sales-section-link{min-height:64px}.sales-history-header{align-items:flex-start}.sales-history-filters{width:100%}}
 
@@ -839,7 +815,9 @@ document.getElementById('addSaleForm')?.addEventListener('submit', function() {
 .sale-actions-menu[open]{min-width:150px}.sale-actions-menu>div{position:static;margin-top:5px}
 @media(max-width:980px){.advanced-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.advanced-filter-grid .filter-search,.advanced-filter-grid .filter-actions{grid-column:span 2}.sales-history-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.sales-section-switcher{width:100%;display:grid;grid-template-columns:1fr 1fr}.sales-section-link{justify-content:center}.sales-history-summary{grid-template-columns:1fr 1fr}.sales-history-topbar{align-items:flex-start;flex-direction:column}.simple-filter-row,.advanced-filter-grid{grid-template-columns:1fr;justify-content:stretch}.advanced-filter-grid .filter-search,.advanced-filter-grid .filter-actions{grid-column:1}.filter-actions{justify-content:flex-start}.sales-pagination{align-items:flex-start;flex-direction:column}.sales-auto-period{align-items:flex-start}.sales-history-summary article{padding:11px}.sales-history-summary strong{font-size:13px}}
-.sale-item-headings{grid-template-columns:minmax(175px,1.35fr) minmax(115px,.9fr) 85px 70px 105px 30px}
+.sale-item-headings{grid-template-columns:minmax(210px,1.6fr) 95px 85px minmax(120px,.8fr) 30px}
+.sales-add-primary{text-decoration:none}
+.sales-closing-stock strong,.sales-closing-stock small{display:block}.sales-closing-stock strong{color:var(--green);font-size:10.5px}.sales-closing-stock strong span{color:var(--text2);font-size:9px;font-weight:600}.sales-closing-stock small{margin-top:4px;color:var(--text3);font-size:8.5px;font-weight:500}
 </style>
 
 <?php
@@ -863,11 +841,10 @@ if (isset($_GET['view_id'])):
     if ($sale):
         // Fetch invoice line items
         $iQuery = "
-            SELECT si.*,pr.name product_name,pr.sku,pr.uom,su.code sale_uom,pb.lot_number
+            SELECT si.*,pr.name product_name,pr.sku,pr.uom,su.code sale_uom
             FROM sale_items si
             JOIN products pr ON si.product_id=pr.id AND pr.business_id=si.business_id
             JOIN units_of_measure su ON su.id=si.sale_uom_id
-            LEFT JOIN product_batches pb ON pb.id=si.batch_id AND pb.business_id=si.business_id
             WHERE si.sale_id=? AND si.business_id=?
         ";
         $iStmt = mysqli_prepare($conn, $iQuery);
@@ -894,7 +871,7 @@ if (isset($_GET['view_id'])):
       itemsHtml += `
         <tr>
           <td><span class="code-badge"><?php echo e($it['sku']); ?></span></td>
-          <td class="td-name"><?php echo e($it['product_name']); ?><?php if ($it['lot_number']): ?><small style="display:block;color:var(--text3)">Lot <?php echo e($it['lot_number']); ?></small><?php endif; ?></td>
+          <td class="td-name"><?php echo e($it['product_name']); ?></td>
           <td><?php echo e(formatInventoryDecimal($it['sale_quantity']).' '.$it['sale_uom']); ?></td>
           <td><?php echo formatCurrency($it['sale_unit_price'], $bizCur); ?> / <?php echo e($it['sale_uom']); ?></td>
           <td class="td-bold" style="color:var(--green);">${"<?php echo formatCurrency($it['line_total'], $bizCur); ?>"}</td>

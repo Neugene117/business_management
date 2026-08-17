@@ -94,11 +94,10 @@ if ($purchaseId > 0) {
     mysqli_stmt_execute($selectedStmt);
     $selectedPurchase = mysqli_fetch_assoc(mysqli_stmt_get_result($selectedStmt));
     if ($selectedPurchase) {
-        $lineStmt = mysqli_prepare($conn, 'SELECT pi.id,pi.ordered_quantity,pi.received_quantity,pi.unit_cost,pi.unit_selling_price,pi.line_total,
-                pr.name product_name,pr.sku,pr.uom,pb.lot_number,COALESCE(pi.expiry_date,pb.expires_at) expires_at
+        $lineStmt = mysqli_prepare($conn, 'SELECT pi.id,pi.ordered_quantity,pi.received_quantity,pi.unit_cost,pi.unit_selling_price,pi.line_total,pi.expiry_date expires_at,
+                pr.name product_name,pr.sku,pr.uom
             FROM purchase_items pi
             JOIN products pr ON pr.id=pi.product_id AND pr.business_id=pi.business_id
-            LEFT JOIN product_batches pb ON pb.id=pi.batch_id AND pb.business_id=pi.business_id
             WHERE pi.purchase_id=? AND pi.business_id=? ORDER BY pi.id');
         mysqli_stmt_bind_param($lineStmt, 'ii', $purchaseId, $businessId);
         mysqli_stmt_execute($lineStmt);
@@ -172,7 +171,7 @@ if ((int)($_GET['purchase_id'] ?? 0) > 0) {
         <?php endif; ?>
         <div class="receiving-lines-wrap"><table class="data-table receiving-lines"><thead><tr><th>Product</th><th>Ordered</th><th>Already Received</th><th>Remaining</th><th>Received Value</th><th>Remaining Value</th><?php if(!$isCompleted&&$canReceive):?><th>Receive Now</th><?php endif;?></tr></thead><tbody>
           <?php while ($line=mysqli_fetch_assoc($selectedLines)): $remaining=max(0,(float)$line['ordered_quantity']-(float)$line['received_quantity']);$receivedValue=(float)$line['received_quantity']*(float)$line['unit_cost'];$remainingValue=$remaining*(float)$line['unit_cost']; ?>
-            <tr><td><strong><?php echo e($line['product_name']); ?></strong><small><?php echo e($line['sku']); ?><?php echo $line['lot_number']?' · Lot '.e($line['lot_number']):''; ?></small></td><td><?php echo number_format($line['ordered_quantity'],4); ?> <?php echo e($line['uom']); ?></td><td class="value-received"><?php echo number_format($line['received_quantity'],4); ?></td><td class="value-remaining"><?php echo number_format($remaining,4); ?></td><td><?php echo formatCurrency($receivedValue,$currency); ?></td><td><?php echo formatCurrency($remainingValue,$currency); ?></td><?php if(!$isCompleted&&$canReceive):?><td><input type="hidden" name="item_ids[]" value="<?php echo (int)$line['id']; ?>"><input class="receive-quantity" type="number" name="received_quantities[]" min="0" max="<?php echo e(number_format($remaining,4,'.','')); ?>" step=".0001" value="0" data-remaining="<?php echo e(number_format($remaining,4,'.','')); ?>" <?php echo $remaining<=0?'readonly':''; ?>></td><?php endif;?></tr>
+            <tr><td><strong><?php echo e($line['product_name']); ?></strong><small><?php echo e($line['sku']); ?></small></td><td><?php echo number_format($line['ordered_quantity'],4); ?> <?php echo e($line['uom']); ?></td><td class="value-received"><?php echo number_format($line['received_quantity'],4); ?></td><td class="value-remaining"><?php echo number_format($remaining,4); ?></td><td><?php echo formatCurrency($receivedValue,$currency); ?></td><td><?php echo formatCurrency($remainingValue,$currency); ?></td><?php if(!$isCompleted&&$canReceive):?><td><input type="hidden" name="item_ids[]" value="<?php echo (int)$line['id']; ?>"><input class="receive-quantity" type="number" name="received_quantities[]" min="0" max="<?php echo e(number_format($remaining,4,'.','')); ?>" step=".0001" value="0" data-remaining="<?php echo e(number_format($remaining,4,'.','')); ?>" <?php echo $remaining<=0?'readonly':''; ?>></td><?php endif;?></tr>
           <?php endwhile; ?>
         </tbody></table></div>
         <?php if(!$isCompleted&&!$canReceive):?><div class="receiving-permission-note">You can view receiving information, but you do not have permission to post stock receipts.</div><?php endif;?>

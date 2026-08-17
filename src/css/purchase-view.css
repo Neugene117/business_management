@@ -1,0 +1,855 @@
+.purchase-record-page {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding-bottom: 24px;
+}
+
+.record-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text3);
+  font-size: 11.5px;
+}
+
+.record-breadcrumb a {
+  color: var(--blue);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.record-breadcrumb a:hover {
+  text-decoration: underline;
+}
+
+.record-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, var(--card) 68%, var(--blue-bg));
+}
+
+.record-header-copy {
+  min-width: 0;
+}
+
+.record-title-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.record-eyebrow {
+  color: var(--text3);
+  font-size: 10.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+
+.record-header h1 {
+  margin: 7px 0 0;
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.record-header p {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 7px 0 0;
+  color: var(--text3);
+  font-size: 11.5px;
+}
+
+.record-header p strong {
+  color: var(--text2);
+  font-weight: 600;
+}
+
+.record-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.record-header-actions form {
+  margin: 0;
+}
+
+.record-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 13px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+
+.record-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(27, 75, 90, .2);
+}
+
+.record-button-primary {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: #fff;
+}
+
+.record-button-primary:hover {
+  background: var(--orange-mid);
+  border-color: var(--orange-mid);
+}
+
+.record-button-secondary {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--text2);
+}
+
+.record-button-secondary:hover {
+  background: var(--bg);
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
+.record-button-payment {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+
+.record-button-payment:hover {
+  filter: brightness(.94);
+}
+
+.record-action-menu {
+  position: relative;
+}
+
+.record-action-menu > summary {
+  list-style: none;
+}
+
+.record-action-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.record-action-menu > summary::after {
+  content: '\2304';
+  margin-left: 7px;
+  font-size: 13px;
+}
+
+.record-action-menu[open] > summary {
+  background: var(--bg);
+  border-color: var(--border-hover);
+}
+
+.record-action-menu-panel {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 210px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 12px 30px rgba(26, 35, 50, .14);
+}
+
+.record-action-menu-panel a,
+.record-action-menu-panel button {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text2);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.record-action-menu-panel a:hover,
+.record-action-menu-panel button:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.record-action-menu-panel .record-menu-danger {
+  color: var(--red);
+}
+
+.record-action-menu-panel .record-menu-danger:hover {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.record-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.record-summary article {
+  position: relative;
+  min-height: 112px;
+  padding: 16px 18px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.record-summary span,
+.record-summary small {
+  display: block;
+}
+
+.record-summary span {
+  color: var(--text3);
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: .045em;
+}
+
+.record-summary strong {
+  display: block;
+  margin: 8px 0 5px;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.record-summary small {
+  color: var(--text3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.record-summary-progress {
+  height: 4px;
+  margin-top: 11px;
+  border-radius: 99px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.record-summary-progress i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--green);
+}
+
+.record-section {
+  margin-top: 14px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.record-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.record-section-heading h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.record-section-heading p {
+  margin: 4px 0 0;
+  color: var(--text3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.record-section-heading > span {
+  flex: none;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text2);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.record-overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr .82fr;
+  gap: 12px;
+  padding: 14px;
+}
+
+.record-info-card {
+  min-width: 0;
+  padding: 15px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.record-info-card h3 {
+  margin: 0 0 13px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.record-info-card dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 13px 18px;
+  margin: 0;
+}
+
+.record-info-card dl > div {
+  min-width: 0;
+}
+
+.record-info-card .record-info-wide {
+  grid-column: 1 / -1;
+}
+
+.record-info-card dt {
+  color: var(--text3);
+  font-size: 10px;
+  font-weight: 550;
+}
+
+.record-info-card dd {
+  margin: 4px 0 0;
+  color: var(--text2);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.record-financial-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
+  padding: 14px;
+}
+
+.record-financial-grid > div {
+  padding: 6px 14px;
+  border-right: 1px solid var(--border);
+}
+
+.record-financial-grid > div:first-child {
+  padding-left: 4px;
+}
+
+.record-financial-grid > div:last-child {
+  border-right: 0;
+}
+
+.record-financial-grid span {
+  display: block;
+  color: var(--text3);
+  font-size: 10px;
+  font-weight: 550;
+}
+
+.record-financial-grid strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.record-financial-total strong {
+  color: var(--blue);
+}
+
+.record-financial-paid strong {
+  color: var(--green);
+}
+
+.record-financial-due strong {
+  color: var(--amber);
+}
+
+.record-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 18px;
+  background: var(--bg);
+}
+
+.record-progress > div {
+  width: min(280px, 35%);
+  height: 7px;
+  border-radius: 99px;
+  background: var(--card);
+  overflow: hidden;
+}
+
+.record-progress > div span {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--green);
+}
+
+.record-progress small {
+  color: var(--text3);
+  font-size: 11px;
+}
+
+.record-progress small strong {
+  color: var(--green);
+}
+
+.record-table-scroll {
+  width: 100%;
+  max-height: min(62vh, 720px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hover) transparent;
+}
+
+.record-items-table {
+  min-width: 1180px;
+  font-size: 12px;
+}
+
+.record-items-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px 12px;
+  background: var(--card);
+  box-shadow: 0 1px 0 var(--border);
+  font-size: 11px;
+}
+
+.record-items-table td {
+  padding: 12px;
+  vertical-align: top;
+}
+
+.record-items-table td > strong,
+.record-items-table td > small {
+  display: block;
+}
+
+.record-items-table td > strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.record-items-table td > small {
+  margin-top: 5px;
+  color: var(--text3);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.record-product-cell {
+  min-width: 190px;
+}
+
+.record-pricing-cell {
+  min-width: 180px;
+}
+
+.record-positive > strong {
+  color: var(--green) !important;
+}
+
+.record-warning > strong {
+  color: var(--amber) !important;
+}
+
+.record-total {
+  min-width: 135px;
+}
+
+.record-total > strong {
+  font-weight: 700 !important;
+}
+
+.record-activity-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.record-empty {
+  min-height: 126px;
+  padding: 28px 18px;
+  color: var(--text3);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+.record-empty strong {
+  display: block;
+  color: var(--text2);
+  font-size: 12px;
+}
+
+.record-empty p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.record-empty-action {
+  margin-top: 13px;
+}
+
+.record-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.record-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--table-border);
+}
+
+.record-list article:last-child {
+  border-bottom: 0;
+}
+
+.record-list strong,
+.record-list small {
+  display: block;
+}
+
+.record-list strong {
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.record-list small,
+.record-list p {
+  color: var(--text3);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.record-list small {
+  margin-top: 4px;
+}
+
+.record-list p {
+  margin: 5px 0 0;
+}
+
+.record-list > article > b {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.payment-ledger-values {
+  min-width: 138px;
+  text-align: right;
+}
+
+.payment-ledger-values span {
+  display: block;
+  color: var(--text3);
+  font-size: 9px;
+  font-weight: 550;
+  text-transform: uppercase;
+}
+
+.payment-ledger-values b {
+  display: block;
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.payment-ledger-values small {
+  margin-top: 5px;
+  color: var(--amber);
+  font-weight: 650;
+}
+
+.record-notes-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 14px;
+}
+
+.record-notes-grid article {
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.record-notes-grid h3 {
+  margin: 0;
+  color: var(--text3);
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.record-notes-grid p {
+  margin: 8px 0 0;
+  color: var(--text2);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.purchase-record-missing {
+  max-width: 600px;
+  margin: 60px auto;
+  padding: 24px;
+  text-align: center;
+}
+
+.purchase-record-missing h1 {
+  font-size: 22px;
+}
+
+.purchase-record-missing p {
+  margin: 8px 0 18px;
+  color: var(--text3);
+  font-size: 12px;
+}
+
+@media (max-width: 1180px) {
+  .record-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .record-header-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .record-overview-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .record-overview-grid .record-info-card:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .record-overview-grid .record-info-card:last-child dl {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .record-financial-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+  }
+
+  .record-financial-grid > div {
+    padding: 10px 12px;
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .record-financial-grid > div:nth-child(4n) {
+    border-right: 0;
+  }
+
+  .record-financial-grid > div:nth-last-child(-n + 3) {
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 800px) {
+  .record-summary {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .record-overview-grid,
+  .record-activity-grid,
+  .record-notes-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .record-overview-grid .record-info-card:last-child {
+    grid-column: auto;
+  }
+
+  .record-overview-grid .record-info-card:last-child dl {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .record-header-actions .record-button,
+  .record-header-actions > form {
+    flex: 1;
+  }
+
+  .record-header-actions > form .record-button {
+    width: 100%;
+  }
+
+  .record-action-menu {
+    flex: 1;
+  }
+
+  .record-action-menu > summary {
+    width: 100%;
+  }
+
+  .record-action-menu-panel {
+    right: auto;
+    left: 0;
+  }
+
+  .record-financial-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .record-financial-grid > div,
+  .record-financial-grid > div:nth-child(4n) {
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .record-financial-grid > div:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .record-financial-grid > div:nth-last-child(-n + 3) {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .record-financial-grid > div:last-child {
+    border-bottom: 0;
+  }
+
+  .record-section-heading {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .purchase-record-page {
+    padding-bottom: 12px;
+  }
+
+  .record-header {
+    padding: 18px;
+  }
+
+  .record-header h1 {
+    font-size: 22px;
+  }
+
+  .record-header-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .record-header-actions .record-button,
+  .record-header-actions > form,
+  .record-action-menu {
+    width: 100%;
+    flex: none;
+  }
+
+  .record-action-menu-panel {
+    width: 100%;
+  }
+
+  .record-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .record-summary article {
+    min-height: 0;
+  }
+
+  .record-overview-grid {
+    padding: 10px;
+  }
+
+  .record-info-card dl,
+  .record-overview-grid .record-info-card:last-child dl {
+    grid-template-columns: 1fr;
+  }
+
+  .record-info-card .record-info-wide {
+    grid-column: auto;
+  }
+
+  .record-financial-grid {
+    padding: 10px;
+  }
+
+  .record-financial-grid > div {
+    padding: 10px;
+  }
+
+  .record-section-heading {
+    padding: 14px;
+  }
+
+  .record-progress {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .record-progress > div {
+    width: 100%;
+  }
+
+  .record-list article {
+    grid-template-columns: 1fr;
+  }
+
+  .payment-ledger-values {
+    text-align: left;
+  }
+
+  .record-notes-grid {
+    padding: 10px;
+  }
+}

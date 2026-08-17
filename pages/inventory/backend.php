@@ -62,12 +62,12 @@ try {
         mysqli_begin_transaction($conn);
         try {
             claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'STOCK_ADJUSTMENT_CREATE', ['number'=>$number,'product_id'=>$productId,'location_id'=>$locationId,'batch_id'=>$batchId,'type'=>$adjustmentType,'quantity'=>$quantity]);
-            $check = mysqli_prepare($conn, 'SELECT p.id,p.name,p.track_batches FROM products p JOIN business_locations l ON l.id=? AND l.business_id=p.business_id AND l.is_active=1 WHERE p.id=? AND p.business_id=? AND p.is_active=1 LIMIT 1');
+            $check = mysqli_prepare($conn, 'SELECT p.id,p.name,p.track_batches,EXISTS(SELECT 1 FROM product_batches pb WHERE pb.business_id=p.business_id AND pb.product_id=p.id) has_batches FROM products p JOIN business_locations l ON l.id=? AND l.business_id=p.business_id AND l.is_active=1 WHERE p.id=? AND p.business_id=? AND p.is_active=1 LIMIT 1');
             mysqli_stmt_bind_param($check, 'iii', $locationId, $productId, $businessId);
             mysqli_stmt_execute($check);
             $product = mysqli_fetch_assoc(mysqli_stmt_get_result($check));
             if (!$product) throw new RuntimeException('Select a valid product and active location.');
-            if ((int)$product['track_batches'] === 1 && $batchId === null) throw new RuntimeException('Select a batch/lot for ' . $product['name'] . '.');
+            if (((int)$product['track_batches'] === 1 || (int)$product['has_batches'] === 1) && $batchId === null) throw new RuntimeException('Select a batch/lot for ' . $product['name'] . '.');
             if ($batchId !== null) {
                 $batchCheck = mysqli_prepare($conn, 'SELECT id FROM product_batches WHERE id=? AND business_id=? AND product_id=? LIMIT 1');
                 mysqli_stmt_bind_param($batchCheck, 'iii', $batchId, $businessId, $productId);
@@ -220,12 +220,12 @@ try {
                 $counted = (float)($countedQuantities[$index] ?? -1);
                 $batchId = !empty($batchIds[$index]) ? (int)$batchIds[$index] : null;
                 if ($productId <= 0 || $counted < 0) continue;
-                $productStmt = mysqli_prepare($conn, 'SELECT id,name,track_batches,cost_price FROM products WHERE id=? AND business_id=? AND is_active=1');
+                $productStmt = mysqli_prepare($conn, 'SELECT p.id,p.name,p.track_batches,p.cost_price,EXISTS(SELECT 1 FROM product_batches pb WHERE pb.business_id=p.business_id AND pb.product_id=p.id) has_batches FROM products p WHERE p.id=? AND p.business_id=? AND p.is_active=1');
                 mysqli_stmt_bind_param($productStmt, 'ii', $productId, $businessId);
                 mysqli_stmt_execute($productStmt);
                 $product = mysqli_fetch_assoc(mysqli_stmt_get_result($productStmt));
                 if (!$product) throw new RuntimeException('A counted product is invalid.');
-                if ((int)$product['track_batches'] === 1 && $batchId === null) throw new RuntimeException('Select the counted batch for ' . $product['name'] . '.');
+                if (((int)$product['track_batches'] === 1 || (int)$product['has_batches'] === 1) && $batchId === null) throw new RuntimeException('Select the counted batch for ' . $product['name'] . '.');
                 $balance = lockInventoryBalance($conn, $businessId, $locationId, $productId);
                 $systemQuantity = (float)$balance['quantity_on_hand'];
                 if ($batchId !== null) {

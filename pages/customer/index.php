@@ -192,7 +192,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
         </div>
       </div>
       <div class="modal-footer">
-        <?php if ($returnToSale): ?><a class="btn-sm" style="text-decoration:none;" href="../sale/index?resume_sale=1<?php echo isset($_GET['role']) ? '&role='.rawurlencode((string)$_GET['role']) : ''; ?>">Back to sale</a><?php else: ?><button type="button" class="btn-sm" onclick="closeAddModal()">Cancel</button><?php endif; ?>
+        <?php if ($returnToSale): ?><a class="btn-sm" style="text-decoration:none;" href="../sale/create?resume_sale=1<?php echo isset($_GET['role']) ? '&role='.rawurlencode((string)$_GET['role']) : ''; ?>">Back to sale</a><?php else: ?><button type="button" class="btn-sm" onclick="closeAddModal()">Cancel</button><?php endif; ?>
         <button type="submit" class="btn-primary" id="addBtn"><?php echo $returnToSale ? 'Register and Return' : 'Save Customer'; ?></button>
       </div>
     </form>
@@ -264,7 +264,7 @@ $role_query = isset($_GET['role']) ? '?role=' . e($_GET['role']) : '';
 <?php endif; ?>
 
 <script>
-const returnToSaleUrl=<?php echo $returnToSale ? json_encode('../sale/index?resume_sale=1' . (isset($_GET['role']) ? '&role=' . rawurlencode((string)$_GET['role']) : '')) : 'null'; ?>;
+const returnToSaleUrl=<?php echo $returnToSale ? json_encode('../sale/create?resume_sale=1' . (isset($_GET['role']) ? '&role=' . rawurlencode((string)$_GET['role']) : '')) : 'null'; ?>;
 function openAddModal() {
   document.getElementById('addModalOverlay').style.display = 'flex';
 }

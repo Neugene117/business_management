@@ -16,11 +16,10 @@ $role = getPreviewRole();
 $roleQuery = $role ? '?role=' . rawurlencode($role) : '';
 $csrfToken = generateCsrfToken();
 
-$businessStmt = mysqli_prepare($conn, 'SELECT currency_code,business_name FROM businesses WHERE id=? LIMIT 1');
+$businessStmt = mysqli_prepare($conn, 'SELECT currency_code FROM businesses WHERE id=? LIMIT 1');
 mysqli_stmt_bind_param($businessStmt, 'i', $businessId);mysqli_stmt_execute($businessStmt);
 $business = mysqli_fetch_assoc(mysqli_stmt_get_result($businessStmt)) ?: [];
 $currency = $business['currency_code'] ?? 'RWF';
-$batchPrefix = getCompanyBatchPrefix((string)($business['business_name'] ?? 'COMPANY'));
 
 $suppliers=[];$supplierStmt=mysqli_prepare($conn,'SELECT id,name,supplier_code FROM suppliers WHERE business_id=? AND is_active=1 ORDER BY name');mysqli_stmt_bind_param($supplierStmt,'i',$businessId);mysqli_stmt_execute($supplierStmt);$result=mysqli_stmt_get_result($supplierStmt);while($row=mysqli_fetch_assoc($result))$suppliers[]=$row;
 $locations=[];$locationStmt=mysqli_prepare($conn,'SELECT id,name,code FROM business_locations WHERE business_id=? AND is_active=1 ORDER BY name');mysqli_stmt_bind_param($locationStmt,'i',$businessId);mysqli_stmt_execute($locationStmt);$result=mysqli_stmt_get_result($locationStmt);while($row=mysqli_fetch_assoc($result))$locations[]=$row;
@@ -69,7 +68,6 @@ $products=[];$productStmt=mysqli_prepare($conn,'SELECT p.id,p.name,p.sku,p.uom_i
 <script>
 const purchaseProducts=<?php echo json_encode($products,JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT); ?>;
 const purchaseCurrency=<?php echo json_encode($currency); ?>;
-const purchaseBatchPrefix=<?php echo json_encode($batchPrefix); ?>;
 let purchaseItemIndex=0;
 let purchaseCurrentTotal=0;
 let purchasePaymentAmountEdited=false;
@@ -125,7 +123,7 @@ function syncPurchaseUnit(index){
   salesInput.value=product?(packageSelected?registeredPackageAmount:registeredBaseAmount).toFixed(4):'';
   salesInput.placeholder=`Sales amount / ${selectedCode}`;
   salesInput.setAttribute('aria-label',`Sales amount for one ${selectedCode}`);
-  row.querySelector('.product-help').textContent=product?(Number(product.track_batches)===1?purchaseBatchPrefix+' batch generated · ':'')+(product.package_uom_id?`1 ${product.package_uom} = ${formatPurchaseNumber(product.units_per_package)} ${product.uom}`:`Purchased in ${product.uom}`):'Select a product to load its registered units.';
+  row.querySelector('.product-help').textContent=product?'Batch generated automatically · '+(product.package_uom_id?`1 ${product.package_uom} = ${formatPurchaseNumber(product.units_per_package)} ${product.uom}`:`Purchased in ${product.uom}`):'Select a product to load its registered units.';
   updatePurchaseLine(index);
 }
 function updatePurchaseLine(index){

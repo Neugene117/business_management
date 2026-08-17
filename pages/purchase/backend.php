@@ -156,14 +156,11 @@ try {
                     }
                 }
 
-                $batchId = null;
-                if ((int)$product['track_batches'] === 1) {
-                    $lotNumber = generateUniqueCompanyBatchNumber($conn, $businessId, (string)$business['business_name']);
-                    $batchInsert = mysqli_prepare($conn, 'INSERT INTO product_batches (business_id,product_id,lot_number,expires_at,created_at) VALUES (?,?,?,?,UTC_TIMESTAMP(6))');
-                    mysqli_stmt_bind_param($batchInsert, 'iiss', $businessId, $productId, $lotNumber, $expiryDate);
-                    if (!mysqli_stmt_execute($batchInsert)) throw new RuntimeException('The automatic product batch could not be created.');
-                    $batchId = mysqli_insert_id($conn);
-                }
+                $lotNumber = generateUniqueCompanyBatchNumber($conn, $businessId, (string)$business['business_name']);
+                $batchInsert = mysqli_prepare($conn, 'INSERT INTO product_batches (business_id,product_id,lot_number,expires_at,created_at) VALUES (?,?,?,?,UTC_TIMESTAMP(6))');
+                mysqli_stmt_bind_param($batchInsert, 'iiss', $businessId, $productId, $lotNumber, $expiryDate);
+                if (!mysqli_stmt_execute($batchInsert)) throw new RuntimeException('The automatic product batch could not be created.');
+                $batchId = mysqli_insert_id($conn);
 
                 $lineTotal = normalizeInventoryDecimal($purchaseQuantity * $purchaseUnitCost, 'Purchase line total');
                 $itemStmt = mysqli_prepare($conn, 'INSERT INTO purchase_items (business_id,purchase_id,product_id,batch_id,purchase_uom_id,purchase_quantity,conversion_factor_to_base,purchase_unit_cost,ordered_quantity,received_quantity,unit_cost,unit_selling_price,package_selling_price,discount_amount,tax_amount,line_total,expiry_date,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,0,0,?,?,UTC_TIMESTAMP(6))');

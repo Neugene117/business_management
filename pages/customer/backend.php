@@ -27,12 +27,19 @@ $action = isset($_POST['action']) ? $_POST['action'] : '';
 $businessId = $_SESSION['active_business_id'];
 $roleValue = isset($_GET['role']) ? (string)$_GET['role'] : '';
 $role_query = $roleValue !== '' ? '?role=' . rawurlencode($roleValue) : '';
+$sendJson = static function (int $status, array $payload): void {
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload);
+    exit();
+};
 
 switch ($action) {
     case 'create':
         requirePermission($conn, $_SESSION['membership_id'], $businessId, $permissions['create']);
 
         $returnToSale = ($_POST['return_to'] ?? '') === 'sale';
+        $returnToSalePopup = ($_POST['return_to'] ?? '') === 'sale_popup';
         $createFailureUrl = $returnToSale
             ? 'index.php?open=add&return_to=sale' . ($roleValue !== '' ? '&role=' . rawurlencode($roleValue) : '')
             : 'index.php' . $role_query;
@@ -43,15 +50,31 @@ switch ($action) {
         $tax_number = trim($_POST['tax_number'] ?? NULL);
         $address = trim($_POST['address'] ?? NULL);
 
-        if (empty($name)) {
+        if ($name === '') {
+            if ($returnToSalePopup) $sendJson(422, ['success'=>false, 'message'=>'Customer name is required.']);
             setFlashMessage('error', 'Customer name is required.');
             header('Location: ' . $createFailureUrl);
             exit();
         }
+        if (strlen($name) > 200 || strlen($phone) > 32 || strlen($email) > 254 || strlen($tax_number) > 100 || strlen($address) > 500) {
+            if ($returnToSalePopup) $sendJson(422, ['success'=>false, 'message'=>'One or more customer details are longer than allowed.']);
+            setFlashMessage('error', 'One or more customer details are longer than allowed.');
+            header('Location: ' . $createFailureUrl);
+            exit();
+        }
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            if ($returnToSalePopup) $sendJson(422, ['success'=>false, 'message'=>'Enter a valid email address.']);
+            setFlashMessage('error', 'Enter a valid email address.');
+            header('Location: ' . $createFailureUrl);
+            exit();
+        }
+
+        $customerCode = 'CUS-' . gmdate('Ymd-His') . '-' . strtoupper(bin2hex(random_bytes(2)));
 
         $query = "
             INSERT INTO customers (
                 business_id,
+                customer_code,
                 name,
                 phone,
                 email,
@@ -60,18 +83,20 @@ switch ($action) {
                 is_active,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 1, NOW(6), NOW(6))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, NOW(6), NOW(6))
         ";
 
         $stmt = mysqli_prepare($conn, $query);
 
         if (!$stmt) {
+            if ($returnToSalePopup) $sendJson(500, ['success'=>false, 'message'=>'Customer registration could not be prepared. Please try again.']);
             setFlashMessage('error', 'Failed to prepare customer registration.');
         } else {
             mysqli_stmt_bind_param(
                 $stmt,
-                'isssss',
+                'issssss',
                 $businessId,
+                $customerCode,
                 $name,
                 $phone,
                 $email,
@@ -95,14 +120,22 @@ switch ($action) {
                     ]
                 );
 
+                if ($returnToSalePopup) {
+                    mysqli_stmt_close($stmt);
+                    $sendJson(201, ['success'=>true, 'message'=>'Customer registered successfully.', 'customer'=>['id'=>$customerId, 'name'=>$name]]);
+                }
                 setFlashMessage('success', 'Customer registered successfully.');
                 if ($returnToSale) {
                     $saleQuery = ['resume_sale'=>'1', 'customer_id'=>(string)$customerId];
                     if ($roleValue !== '') $saleQuery['role'] = $roleValue;
-                    header('Location: ../sale/index.php?' . http_build_query($saleQuery));
+                    header('Location: ../sale/create.php?' . http_build_query($saleQuery));
                     exit();
                 }
             } else {
+                if ($returnToSalePopup) {
+                    mysqli_stmt_close($stmt);
+                    $sendJson(500, ['success'=>false, 'message'=>'Customer registration failed. Please try again.']);
+                }
                 setFlashMessage('error', 'Failed to register customer.');
             }
 
