@@ -1009,6 +1009,8 @@ CREATE TABLE `products` (
   `business_id` bigint(20) UNSIGNED NOT NULL,
   `category_id` bigint(20) UNSIGNED NOT NULL,
   `uom_id` bigint(20) UNSIGNED NOT NULL,
+  `package_uom_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `units_per_package` decimal(18,4) DEFAULT NULL,
   `uom` varchar(50) DEFAULT 'UNIT',
   `sku` varchar(100) NOT NULL,
   `barcode` varchar(100) DEFAULT NULL,
@@ -1016,6 +1018,7 @@ CREATE TABLE `products` (
   `description` varchar(1000) DEFAULT NULL,
   `cost_price` decimal(19,4) NOT NULL DEFAULT 0.0000,
   `sale_price` decimal(19,4) NOT NULL DEFAULT 0.0000,
+  `package_sale_price` decimal(19,4) DEFAULT NULL,
   `track_batches` tinyint(1) NOT NULL DEFAULT 0,
   `track_expiry` tinyint(1) NOT NULL DEFAULT 0,
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
@@ -1028,12 +1031,12 @@ CREATE TABLE `products` (
 -- Dumping data for table `products`
 --
 
-INSERT INTO `products` (`id`, `business_id`, `category_id`, `uom_id`, `sku`, `barcode`, `name`, `description`, `cost_price`, `sale_price`, `track_batches`, `track_expiry`, `is_active`, `created_at`, `updated_at`, `deleted_at`) VALUES
-(1, 1, 1, 1, 'WATER-500', '616100000001', 'Mineral Water 500ml', 'Bottled mineral water', 500.0000, 700.0000, 0, 0, 1, '2026-08-08 13:06:12.175415', '2026-08-08 13:06:12.175415', NULL),
-(2, 1, 2, 1, 'RICE-5KG', '616100000002', 'Premium Rice 5kg', 'Five kilogram rice bag', 8000.0000, 10000.0000, 0, 0, 1, '2026-08-08 13:06:12.187247', '2026-08-08 13:06:12.187247', NULL),
-(3, 1, 2, 1, 'OIL-1L', '616100000003', 'Cooking Oil 1L', 'One litre cooking oil', 2500.0000, 3200.0000, 0, 0, 1, '2026-08-08 13:06:12.195109', '2026-08-08 13:06:12.195109', NULL),
-(4, 1, 1, 1, 'MILK-500', '616100000004', 'Fresh Milk 500ml', 'Fresh milk with batch and expiry tracking', 700.0000, 1000.0000, 1, 1, 1, '2026-08-08 13:06:12.203373', '2026-08-08 13:06:12.203373', NULL),
-(5, 1, 3, 1, 'SOAP-100', '616100000005', 'Bath Soap 100g', 'Personal care soap bar', 800.0000, 1200.0000, 0, 0, 1, '2026-08-08 13:06:12.211836', '2026-08-08 13:06:12.211836', NULL);
+INSERT INTO `products` (`id`, `business_id`, `category_id`, `uom_id`, `package_uom_id`, `units_per_package`, `sku`, `barcode`, `name`, `description`, `cost_price`, `sale_price`, `package_sale_price`, `track_batches`, `track_expiry`, `is_active`, `created_at`, `updated_at`, `deleted_at`) VALUES
+(1, 1, 1, 1, NULL, NULL, 'WATER-500', '616100000001', 'Mineral Water 500ml', 'Bottled mineral water', 500.0000, 700.0000, NULL, 0, 0, 1, '2026-08-08 13:06:12.175415', '2026-08-08 13:06:12.175415', NULL),
+(2, 1, 2, 1, NULL, NULL, 'RICE-5KG', '616100000002', 'Premium Rice 5kg', 'Five kilogram rice bag', 8000.0000, 10000.0000, NULL, 0, 0, 1, '2026-08-08 13:06:12.187247', '2026-08-08 13:06:12.187247', NULL),
+(3, 1, 2, 1, NULL, NULL, 'OIL-1L', '616100000003', 'Cooking Oil 1L', 'One litre cooking oil', 2500.0000, 3200.0000, NULL, 0, 0, 1, '2026-08-08 13:06:12.195109', '2026-08-08 13:06:12.195109', NULL),
+(4, 1, 1, 1, NULL, NULL, 'MILK-500', '616100000004', 'Fresh Milk 500ml', 'Fresh milk with batch and expiry tracking', 700.0000, 1000.0000, NULL, 1, 1, 1, '2026-08-08 13:06:12.203373', '2026-08-08 13:06:12.203373', NULL),
+(5, 1, 3, 1, NULL, NULL, 'SOAP-100', '616100000005', 'Bath Soap 100g', 'Personal care soap bar', 800.0000, 1200.0000, NULL, 0, 0, 1, '2026-08-08 13:06:12.211836', '2026-08-08 13:06:12.211836', NULL);
 
 -- --------------------------------------------------------
 
@@ -1138,10 +1141,16 @@ CREATE TABLE `purchase_items` (
   `purchase_id` bigint(20) UNSIGNED NOT NULL,
   `product_id` bigint(20) UNSIGNED NOT NULL,
   `batch_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `expiry_date` date DEFAULT NULL,
+  `purchase_uom_id` bigint(20) UNSIGNED NOT NULL,
+  `purchase_quantity` decimal(18,4) NOT NULL,
+  `conversion_factor_to_base` decimal(18,4) NOT NULL,
+  `purchase_unit_cost` decimal(19,4) NOT NULL,
   `ordered_quantity` decimal(18,4) NOT NULL,
   `received_quantity` decimal(18,4) NOT NULL DEFAULT 0.0000,
   `unit_cost` decimal(19,4) NOT NULL,
   `unit_selling_price` decimal(19,4) NOT NULL,
+  `package_selling_price` decimal(19,4) DEFAULT NULL,
   `discount_amount` decimal(19,4) NOT NULL DEFAULT 0.0000,
   `tax_amount` decimal(19,4) NOT NULL DEFAULT 0.0000,
   `line_total` decimal(19,4) NOT NULL,
@@ -1152,14 +1161,14 @@ CREATE TABLE `purchase_items` (
 -- Dumping data for table `purchase_items`
 --
 
-INSERT INTO `purchase_items` (`id`, `business_id`, `purchase_id`, `product_id`, `batch_id`, `ordered_quantity`, `received_quantity`, `unit_cost`, `unit_selling_price`, `discount_amount`, `tax_amount`, `line_total`, `created_at`) VALUES
-(1, 1, 1, 1, NULL, 100.0000, 100.0000, 500.0000, 700.0000, 0.0000, 0.0000, 50000.0000, '2026-08-08 13:06:12.452623'),
-(2, 1, 1, 2, NULL, 30.0000, 30.0000, 8000.0000, 10000.0000, 0.0000, 0.0000, 240000.0000, '2026-08-08 13:06:12.581176'),
-(3, 1, 1, 3, NULL, 50.0000, 50.0000, 2500.0000, 3200.0000, 0.0000, 0.0000, 125000.0000, '2026-08-08 13:06:12.591962'),
-(4, 1, 1, 4, 1, 80.0000, 80.0000, 700.0000, 1000.0000, 0.0000, 0.0000, 56000.0000, '2026-08-08 13:06:12.601886'),
-(5, 1, 1, 5, NULL, 60.0000, 60.0000, 800.0000, 1200.0000, 0.0000, 0.0000, 48000.0000, '2026-08-08 13:06:12.611188'),
-(6, 1, 2, 1, NULL, 50.0000, 50.0000, 520.0000, 700.0000, 0.0000, 0.0000, 26000.0000, '2026-08-08 13:06:12.669657'),
-(7, 1, 2, 4, 2, 40.0000, 40.0000, 720.0000, 1000.0000, 0.0000, 0.0000, 28800.0000, '2026-08-08 13:06:12.678411');
+INSERT INTO `purchase_items` (`id`, `business_id`, `purchase_id`, `product_id`, `batch_id`, `expiry_date`, `purchase_uom_id`, `purchase_quantity`, `conversion_factor_to_base`, `purchase_unit_cost`, `ordered_quantity`, `received_quantity`, `unit_cost`, `unit_selling_price`, `package_selling_price`, `discount_amount`, `tax_amount`, `line_total`, `created_at`) VALUES
+(1, 1, 1, 1, NULL, NULL, 1, 100.0000, 1.0000, 500.0000, 100.0000, 100.0000, 500.0000, 700.0000, NULL, 0.0000, 0.0000, 50000.0000, '2026-08-08 13:06:12.452623'),
+(2, 1, 1, 2, NULL, NULL, 1, 30.0000, 1.0000, 8000.0000, 30.0000, 30.0000, 8000.0000, 10000.0000, NULL, 0.0000, 0.0000, 240000.0000, '2026-08-08 13:06:12.581176'),
+(3, 1, 1, 3, NULL, NULL, 1, 50.0000, 1.0000, 2500.0000, 50.0000, 50.0000, 2500.0000, 3200.0000, NULL, 0.0000, 0.0000, 125000.0000, '2026-08-08 13:06:12.591962'),
+(4, 1, 1, 4, 1, '2026-09-15', 1, 80.0000, 1.0000, 700.0000, 80.0000, 80.0000, 700.0000, 1000.0000, NULL, 0.0000, 0.0000, 56000.0000, '2026-08-08 13:06:12.601886'),
+(5, 1, 1, 5, NULL, NULL, 1, 60.0000, 1.0000, 800.0000, 60.0000, 60.0000, 800.0000, 1200.0000, NULL, 0.0000, 0.0000, 48000.0000, '2026-08-08 13:06:12.611188'),
+(6, 1, 2, 1, NULL, NULL, 1, 50.0000, 1.0000, 520.0000, 50.0000, 50.0000, 520.0000, 700.0000, NULL, 0.0000, 0.0000, 26000.0000, '2026-08-08 13:06:12.669657'),
+(7, 1, 2, 4, 2, '2026-10-15', 1, 40.0000, 1.0000, 720.0000, 40.0000, 40.0000, 720.0000, 1000.0000, NULL, 0.0000, 0.0000, 28800.0000, '2026-08-08 13:06:12.678411');
 
 -- --------------------------------------------------------
 
@@ -1389,6 +1398,10 @@ CREATE TABLE `sale_items` (
   `sale_id` bigint(20) UNSIGNED NOT NULL,
   `product_id` bigint(20) UNSIGNED NOT NULL,
   `batch_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `sale_uom_id` bigint(20) UNSIGNED NOT NULL,
+  `sale_quantity` decimal(18,4) NOT NULL,
+  `conversion_factor_to_base` decimal(18,4) NOT NULL,
+  `sale_unit_price` decimal(19,4) NOT NULL,
   `quantity` decimal(18,4) NOT NULL,
   `unit_price` decimal(19,4) NOT NULL,
   `discount_amount` decimal(19,4) NOT NULL DEFAULT 0.0000,
@@ -1405,14 +1418,14 @@ CREATE TABLE `sale_items` (
 -- Dumping data for table `sale_items`
 --
 
-INSERT INTO `sale_items` (`id`, `business_id`, `sale_id`, `product_id`, `batch_id`, `quantity`, `unit_price`, `discount_amount`, `tax_amount`, `net_sales_amount`, `line_total`, `unit_cost_at_sale`, `cogs_total`, `created_at`) VALUES
-(1, 1, 1, 1, NULL, 10.0000, 700.0000, 0.0000, 0.0000, 7000.0000, 7000.0000, 506.6667, 5066.6670, '2026-08-08 13:06:12.817568'),
-(2, 1, 1, 4, 1, 5.0000, 1000.0000, 0.0000, 0.0000, 5000.0000, 5000.0000, 706.6667, 3533.3335, '2026-08-08 13:06:12.843453'),
-(3, 1, 2, 2, NULL, 2.0000, 10000.0000, 0.0000, 0.0000, 20000.0000, 20000.0000, 8000.0000, 16000.0000, '2026-08-08 13:06:12.909086'),
-(4, 1, 2, 3, NULL, 3.0000, 3200.0000, 0.0000, 0.0000, 9600.0000, 9600.0000, 2500.0000, 7500.0000, '2026-08-08 13:06:12.918180'),
-(5, 1, 2, 5, NULL, 5.0000, 1200.0000, 0.0000, 0.0000, 6000.0000, 6000.0000, 800.0000, 4000.0000, '2026-08-08 13:06:12.926175'),
-(6, 1, 3, 4, 1, 10.0000, 1000.0000, 0.0000, 0.0000, 10000.0000, 10000.0000, 706.6667, 7066.6670, '2026-08-08 13:06:12.997905'),
-(7, 1, 3, 1, NULL, 20.0000, 700.0000, 0.0000, 0.0000, 14000.0000, 14000.0000, 506.6667, 10133.3340, '2026-08-08 13:06:13.005775');
+INSERT INTO `sale_items` (`id`, `business_id`, `sale_id`, `product_id`, `batch_id`, `sale_uom_id`, `sale_quantity`, `conversion_factor_to_base`, `sale_unit_price`, `quantity`, `unit_price`, `discount_amount`, `tax_amount`, `net_sales_amount`, `line_total`, `unit_cost_at_sale`, `cogs_total`, `created_at`) VALUES
+(1, 1, 1, 1, NULL, 1, 10.0000, 1.0000, 700.0000, 10.0000, 700.0000, 0.0000, 0.0000, 7000.0000, 7000.0000, 506.6667, 5066.6670, '2026-08-08 13:06:12.817568'),
+(2, 1, 1, 4, 1, 1, 5.0000, 1.0000, 1000.0000, 5.0000, 1000.0000, 0.0000, 0.0000, 5000.0000, 5000.0000, 706.6667, 3533.3335, '2026-08-08 13:06:12.843453'),
+(3, 1, 2, 2, NULL, 1, 2.0000, 1.0000, 10000.0000, 2.0000, 10000.0000, 0.0000, 0.0000, 20000.0000, 20000.0000, 8000.0000, 16000.0000, '2026-08-08 13:06:12.909086'),
+(4, 1, 2, 3, NULL, 1, 3.0000, 1.0000, 3200.0000, 3.0000, 3200.0000, 0.0000, 0.0000, 9600.0000, 9600.0000, 2500.0000, 7500.0000, '2026-08-08 13:06:12.918180'),
+(5, 1, 2, 5, NULL, 1, 5.0000, 1.0000, 1200.0000, 5.0000, 1200.0000, 0.0000, 0.0000, 6000.0000, 6000.0000, 800.0000, 4000.0000, '2026-08-08 13:06:12.926175'),
+(6, 1, 3, 4, 1, 1, 10.0000, 1.0000, 1000.0000, 10.0000, 1000.0000, 0.0000, 0.0000, 10000.0000, 10000.0000, 706.6667, 7066.6670, '2026-08-08 13:06:12.997905'),
+(7, 1, 3, 1, NULL, 1, 20.0000, 1.0000, 700.0000, 20.0000, 700.0000, 0.0000, 0.0000, 14000.0000, 14000.0000, 506.6667, 10133.3340, '2026-08-08 13:06:13.005775');
 
 -- --------------------------------------------------------
 
@@ -2075,7 +2088,8 @@ ALTER TABLE `products`
   ADD UNIQUE KEY `uq_products_barcode` (`business_id`,`barcode`),
   ADD KEY `idx_products_name` (`business_id`,`name`),
   ADD KEY `fk_products_category` (`business_id`,`category_id`),
-  ADD KEY `fk_products_uom` (`uom_id`);
+  ADD KEY `fk_products_uom` (`uom_id`),
+  ADD KEY `idx_products_package_uom` (`package_uom_id`);
 
 --
 -- Indexes for table `product_batches`
@@ -2119,7 +2133,8 @@ ALTER TABLE `purchase_items`
   ADD UNIQUE KEY `uq_purchase_items_business_id` (`business_id`,`id`),
   ADD KEY `idx_purchase_items_purchase` (`business_id`,`purchase_id`),
   ADD KEY `idx_purchase_items_product` (`business_id`,`product_id`),
-  ADD KEY `fk_purchase_items_batch` (`business_id`,`product_id`,`batch_id`);
+  ADD KEY `fk_purchase_items_batch` (`business_id`,`product_id`,`batch_id`),
+  ADD KEY `idx_purchase_items_purchase_uom` (`purchase_uom_id`);
 
 --
 -- Indexes for table `purchase_payments`
@@ -2204,7 +2219,8 @@ ALTER TABLE `sale_items`
   ADD UNIQUE KEY `uq_sale_items_business_id` (`business_id`,`id`),
   ADD KEY `idx_sale_items_sale` (`business_id`,`sale_id`),
   ADD KEY `idx_sale_items_product` (`business_id`,`product_id`),
-  ADD KEY `fk_sale_items_batch` (`business_id`,`product_id`,`batch_id`);
+  ADD KEY `fk_sale_items_batch` (`business_id`,`product_id`,`batch_id`),
+  ADD KEY `idx_sale_items_sale_uom` (`sale_uom_id`);
 
 --
 -- Indexes for table `sale_payments`
@@ -2811,8 +2827,10 @@ ALTER TABLE `products`
   ADD CONSTRAINT `fk_products_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE CASCADE,
   ADD CONSTRAINT `fk_products_category` FOREIGN KEY (`business_id`,`category_id`) REFERENCES `product_categories` (`business_id`, `id`),
   ADD CONSTRAINT `fk_products_uom` FOREIGN KEY (`uom_id`) REFERENCES `units_of_measure` (`id`),
+  ADD CONSTRAINT `fk_products_package_uom` FOREIGN KEY (`package_uom_id`) REFERENCES `units_of_measure` (`id`) ON DELETE RESTRICT,
   ADD CONSTRAINT `chk_products_cost_price` CHECK (`cost_price` >= 0),
-  ADD CONSTRAINT `chk_products_sale_price` CHECK (`sale_price` >= 0);
+  ADD CONSTRAINT `chk_products_sale_price` CHECK (`sale_price` >= 0),
+  ADD CONSTRAINT `chk_products_package_configuration` CHECK (((`package_uom_id` IS NULL AND `units_per_package` IS NULL AND `package_sale_price` IS NULL) OR (`package_uom_id` IS NOT NULL AND `units_per_package` > 0 AND `package_uom_id` <> `uom_id` AND (`package_sale_price` IS NULL OR `package_sale_price` >= 0))));
 
 --
 -- Constraints for table `units_of_measure`
@@ -2851,7 +2869,12 @@ ALTER TABLE `purchase_items`
   ADD CONSTRAINT `fk_purchase_items_batch` FOREIGN KEY (`business_id`,`product_id`,`batch_id`) REFERENCES `product_batches` (`business_id`, `product_id`, `id`),
   ADD CONSTRAINT `fk_purchase_items_product` FOREIGN KEY (`business_id`,`product_id`) REFERENCES `products` (`business_id`, `id`),
   ADD CONSTRAINT `fk_purchase_items_purchase` FOREIGN KEY (`business_id`,`purchase_id`) REFERENCES `purchases` (`business_id`, `id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `chk_purchase_item_selling_price` CHECK (`unit_selling_price` >= 0);
+  ADD CONSTRAINT `fk_purchase_items_purchase_uom` FOREIGN KEY (`purchase_uom_id`) REFERENCES `units_of_measure` (`id`) ON DELETE RESTRICT,
+  ADD CONSTRAINT `chk_purchase_item_selling_price` CHECK (`unit_selling_price` >= 0),
+  ADD CONSTRAINT `chk_purchase_items_transaction_quantity` CHECK (`purchase_quantity` > 0),
+  ADD CONSTRAINT `chk_purchase_items_conversion_factor` CHECK (`conversion_factor_to_base` > 0),
+  ADD CONSTRAINT `chk_purchase_items_transaction_cost` CHECK (`purchase_unit_cost` >= 0),
+  ADD CONSTRAINT `chk_purchase_items_package_price` CHECK (`package_selling_price` IS NULL OR `package_selling_price` >= 0);
 
 --
 -- Constraints for table `purchase_payments`
@@ -2924,7 +2947,11 @@ ALTER TABLE `taxes`
 ALTER TABLE `sale_items`
   ADD CONSTRAINT `fk_sale_items_batch` FOREIGN KEY (`business_id`,`product_id`,`batch_id`) REFERENCES `product_batches` (`business_id`, `product_id`, `id`),
   ADD CONSTRAINT `fk_sale_items_product` FOREIGN KEY (`business_id`,`product_id`) REFERENCES `products` (`business_id`, `id`),
-  ADD CONSTRAINT `fk_sale_items_sale` FOREIGN KEY (`business_id`,`sale_id`) REFERENCES `sales` (`business_id`, `id`) ON DELETE CASCADE;
+  ADD CONSTRAINT `fk_sale_items_sale` FOREIGN KEY (`business_id`,`sale_id`) REFERENCES `sales` (`business_id`, `id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_sale_items_sale_uom` FOREIGN KEY (`sale_uom_id`) REFERENCES `units_of_measure` (`id`) ON DELETE RESTRICT,
+  ADD CONSTRAINT `chk_sale_items_transaction_quantity` CHECK (`sale_quantity` > 0),
+  ADD CONSTRAINT `chk_sale_items_conversion_factor` CHECK (`conversion_factor_to_base` > 0),
+  ADD CONSTRAINT `chk_sale_items_transaction_price` CHECK (`sale_unit_price` >= 0);
 
 --
 -- Constraints for table `sale_payments`

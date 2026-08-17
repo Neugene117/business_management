@@ -121,9 +121,10 @@ $query = "
            u.first_name, u.last_name,
            COALESCE((SELECT SUM(sri.quantity * ori.unit_price) FROM sale_return_items sri JOIN sale_returns sr ON sr.id=sri.sale_return_id AND sr.status='COMPLETED' JOIN sale_items ori ON ori.id=sri.sale_item_id WHERE sr.sale_id=s.id),0) returned_revenue,
            COALESCE((SELECT SUM(sri.quantity * ori.unit_cost_at_sale) FROM sale_return_items sri JOIN sale_returns sr ON sr.id=sri.sale_return_id AND sr.status='COMPLETED' JOIN sale_items ori ON ori.id=sri.sale_item_id WHERE sr.sale_id=s.id),0) returned_cogs,
-           (SELECT GROUP_CONCAT(CONCAT(pr.name, ' | ', CAST(si.quantity AS CHAR), ' ', pr.uom, ' @ ', CAST(si.unit_price AS CHAR)) ORDER BY si.id SEPARATOR '\n')
+           (SELECT GROUP_CONCAT(CONCAT(pr.name, ' | ', CAST(si.sale_quantity AS CHAR), ' ', su.code, ' @ ', CAST(si.sale_unit_price AS CHAR)) ORDER BY si.id SEPARATOR '\n')
               FROM sale_items si
               JOIN products pr ON pr.business_id = si.business_id AND pr.id = si.product_id
+              JOIN units_of_measure su ON su.id=si.sale_uom_id
              WHERE si.business_id = s.business_id AND si.sale_id = s.id) AS items_sold
     FROM sales s
     LEFT JOIN customers c ON s.customer_id = c.id
@@ -164,7 +165,7 @@ while ($lRow = mysqli_fetch_assoc($lResult)) {
 }
 
 // Fetch active products
-$prodQuery = "SELECT id,name,sku,uom,sale_price,track_batches,track_expiry FROM products WHERE business_id=? AND is_active=1 ORDER BY name";
+$prodQuery = "SELECT p.id,p.name,p.sku,p.uom_id,p.uom,p.sale_price,p.package_uom_id,p.units_per_package,p.package_sale_price,pu.code package_uom,p.track_batches,p.track_expiry FROM products p LEFT JOIN units_of_measure pu ON pu.id=p.package_uom_id WHERE p.business_id=? AND p.is_active=1 ORDER BY p.name";
 $pStmt = mysqli_prepare($conn, $prodQuery);
 mysqli_stmt_bind_param($pStmt, 'i', $businessId);
 mysqli_stmt_execute($pStmt);
@@ -526,7 +527,7 @@ $paginationParams = array_filter($paginationParams, static fn($value) => $value 
             <div class="sale-form-section-title"><span>2</span><div><strong>Invoice items</strong><small>Add products, quantities, batches, and prices</small></div></div>
             <button type="button" class="btn-sm sale-add-line" onclick="addItemRow()">+ Add item</button>
           </div>
-          <div class="sale-item-headings" aria-hidden="true"><span>Product / available</span><span>Batch / lot</span><span>Quantity</span><span>Selling price<?php echo $canOverridePrice ? ' (editable)' : ''; ?></span><span></span></div>
+          <div class="sale-item-headings" aria-hidden="true"><span>Product / available</span><span>Batch / lot</span><span>Sale Unit</span><span>Quantity</span><span>Price / sale unit<?php echo $canOverridePrice ? ' (editable)' : ''; ?></span><span></span></div>
           
           <div id="itemsContainer" class="sale-items-container">
             <!-- Dynamically added rows -->
@@ -625,7 +626,7 @@ function addItemRow(itemData) {
   const div = document.createElement('div');
   div.className = 'item-row';
   div.style.display = 'grid';
-  div.style.gridTemplateColumns = 'minmax(190px,1.4fr) minmax(130px,1fr) 80px 110px 30px';
+  div.style.gridTemplateColumns = 'minmax(175px,1.35fr) minmax(115px,.9fr) 85px 70px 105px 30px';
   div.style.gap = '6px';
   div.style.alignItems = 'center';
   div.id = 'row-' + index;
@@ -638,6 +639,7 @@ function addItemRow(itemData) {
   div.innerHTML = `
     <div><select class="sale-product" name="product_ids[]" required onchange="rowProductChanged(${index})" style="font-size:11.5px; padding:6px;width:100%">${optionsHtml}</select><small class="stock-hint">Select a location and product</small></div>
     <select class="sale-batch" name="batch_ids[]" aria-label="Batch or lot" style="font-size:11.5px;padding:6px"><option value="">Not required</option></select>
+    <select class="sale-uom" name="sale_uom_ids[]" required onchange="rowSaleUnitChanged(${index})" aria-label="Sale unit" style="font-size:11.5px;padding:6px"><option value="">Unit</option></select>
     <input type="number" name="quantities[]" min="0.0001" step="0.0001" placeholder="Qty" required oninput="recalcTotals()" style="font-size:11.5px; padding:6px;">
     <input type="number" name="unit_prices[]" min="0" step="0.0001" placeholder="Selling price" title="Defaults to the product selling price" aria-label="Selling price per unit" required oninput="recalcTotals()" style="font-size:11.5px; padding:6px;" ${canOverridePrice ? '' : 'readonly'}>
     <button type="button" class="btn-action reject" onclick="removeItemRow(${index})" style="padding:4px; font-size:11px; text-align:center;">X</button>
@@ -647,6 +649,7 @@ function addItemRow(itemData) {
   if (itemData) {
     div.querySelector('.sale-product').value = String(itemData.product_id || '');
     rowProductChanged(index);
+    if(itemData.sale_uom_id){div.querySelector('.sale-uom').value=String(itemData.sale_uom_id);rowSaleUnitChanged(index);}
     div.querySelector('input[name="quantities[]"]').value = itemData.quantity || '';
     div.querySelector('input[name="unit_prices[]"]').value = itemData.unit_price || '';
     div.querySelector('.sale-batch').value = String(itemData.batch_id || '');
@@ -668,29 +671,28 @@ function removeItemRow(index) {
 function rowProductChanged(index) {
   const row = document.getElementById('row-' + index);
   const select = row.querySelector('.sale-product');
-  const priceInput = row.querySelector('input[name="unit_prices[]"]');
-  const selectedOpt = select.options[select.selectedIndex];
-  const price = selectedOpt.getAttribute('data-price');
-  if (price) {
-    priceInput.value = parseFloat(price).toFixed(4);
-  }
   const productId = parseInt(select.value || '0', 10);
   const locationId = parseInt(document.getElementById('s_loc').value || '0', 10);
   const product = productsList.find(p => parseInt(p.id, 10) === productId);
   const stock = stockList.find(s => parseInt(s.product_id, 10) === productId && parseInt(s.location_id, 10) === locationId);
-  row.querySelector('.stock-hint').textContent = `Available: ${stock ? parseFloat(stock.available_quantity).toFixed(4) : '0.0000'} ${product ? product.uom : ''}`;
+  const uomSelect=row.querySelector('.sale-uom');const previousUom=uomSelect.value;uomSelect.innerHTML='<option value="">Unit</option>';if(product){uomSelect.insertAdjacentHTML('beforeend',`<option value="${product.uom_id}">${product.uom}</option>`);if(product.package_uom_id)uomSelect.insertAdjacentHTML('beforeend',`<option value="${product.package_uom_id}">${product.package_uom}</option>`);uomSelect.value=Array.from(uomSelect.options).some(option=>option.value===previousUom)?previousUom:String(product.uom_id);}
+  row.querySelector('.stock-hint').textContent = `Available: ${formatSaleStock(stock ? stock.available_quantity : 0,product)}`;
   const batchSelect = row.querySelector('.sale-batch');
   batchSelect.innerHTML = '<option value="">' + (product && parseInt(product.track_batches, 10) === 1 ? '-- Select batch --' : 'Not required') + '</option>';
   if (product && parseInt(product.track_batches, 10) === 1) {
     batchSelect.required = true;
     batchesList.filter(b => parseInt(b.product_id, 10) === productId && parseInt(b.location_id || '0', 10) === locationId && parseFloat(b.available_quantity || '0') > 0 && (!b.expires_at || b.expires_at >= saleLocalDate)).forEach(b => {
-      batchSelect.insertAdjacentHTML('beforeend', `<option value="${b.id}">${b.lot_number} · ${parseFloat(b.available_quantity).toFixed(4)} available${b.expires_at ? ' · exp ' + b.expires_at : ''}</option>`);
+      batchSelect.insertAdjacentHTML('beforeend', `<option value="${b.id}">${b.lot_number} · ${formatSaleStock(b.available_quantity,product)} available${b.expires_at ? ' · exp ' + b.expires_at : ''}</option>`);
     });
   } else {
     batchSelect.required = false;
   }
-  recalcTotals();
+  rowSaleUnitChanged(index);
 }
+
+function formatSaleNumber(value){const number=Math.round((parseFloat(value)||0)*10000)/10000;return Math.abs(number-Math.round(number))<.00005?String(Math.round(number)):number.toFixed(4);}
+function formatSaleStock(value,product){const base=Math.round((parseFloat(value)||0)*10000)/10000;if(!product)return formatSaleNumber(base);const factor=parseFloat(product.units_per_package||0);if(!product.package_uom_id||factor<=0)return `${formatSaleNumber(base)} ${product.uom}`;const packages=Math.floor((Math.abs(base)+.0000001)/factor);const remainder=Math.round((Math.abs(base)-packages*factor)*10000)/10000;const sign=base<0?'-':'';const parts=[];if(packages>0)parts.push(`${sign}${packages} ${product.package_uom}`);if(remainder>.00005||!parts.length)parts.push(`${parts.length?'':sign}${formatSaleNumber(remainder)} ${product.uom}`);return parts.join(base<0?' - ':' + ');}
+function rowSaleUnitChanged(index){const row=document.getElementById('row-'+index);const product=productsList.find(p=>parseInt(p.id,10)===parseInt(row.querySelector('.sale-product').value||'0',10));const selected=parseInt(row.querySelector('.sale-uom').value||'0',10);const price=row.querySelector('input[name="unit_prices[]"]');if(!product){price.value='';recalcTotals();return;}const packageSelected=product.package_uom_id&&selected===parseInt(product.package_uom_id,10);const suggested=packageSelected?(product.package_sale_price!==null?parseFloat(product.package_sale_price):parseFloat(product.sale_price||0)*parseFloat(product.units_per_package||0)):parseFloat(product.sale_price||0);price.value=suggested.toFixed(4);recalcTotals();}
 
 document.getElementById('s_loc')?.addEventListener('change', function() {
   document.querySelectorAll('#itemsContainer .item-row').forEach(row => rowProductChanged(parseInt(row.id.replace('row-', ''), 10)));
@@ -745,6 +747,7 @@ function collectSaleDraft() {
       return {
         product_id: row.querySelector('.sale-product')?.value || '',
         batch_id: row.querySelector('.sale-batch')?.value || '',
+        sale_uom_id: row.querySelector('.sale-uom')?.value || '',
         quantity: row.querySelector('input[name="quantities[]"]')?.value || '',
         unit_price: row.querySelector('input[name="unit_prices[]"]')?.value || ''
       };
@@ -836,6 +839,7 @@ document.getElementById('addSaleForm')?.addEventListener('submit', function() {
 .sale-actions-menu[open]{min-width:150px}.sale-actions-menu>div{position:static;margin-top:5px}
 @media(max-width:980px){.advanced-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.advanced-filter-grid .filter-search,.advanced-filter-grid .filter-actions{grid-column:span 2}.sales-history-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.sales-section-switcher{width:100%;display:grid;grid-template-columns:1fr 1fr}.sales-section-link{justify-content:center}.sales-history-summary{grid-template-columns:1fr 1fr}.sales-history-topbar{align-items:flex-start;flex-direction:column}.simple-filter-row,.advanced-filter-grid{grid-template-columns:1fr;justify-content:stretch}.advanced-filter-grid .filter-search,.advanced-filter-grid .filter-actions{grid-column:1}.filter-actions{justify-content:flex-start}.sales-pagination{align-items:flex-start;flex-direction:column}.sales-auto-period{align-items:flex-start}.sales-history-summary article{padding:11px}.sales-history-summary strong{font-size:13px}}
+.sale-item-headings{grid-template-columns:minmax(175px,1.35fr) minmax(115px,.9fr) 85px 70px 105px 30px}
 </style>
 
 <?php
@@ -859,9 +863,10 @@ if (isset($_GET['view_id'])):
     if ($sale):
         // Fetch invoice line items
         $iQuery = "
-            SELECT si.*,pr.name product_name,pr.sku,pr.uom,pb.lot_number
+            SELECT si.*,pr.name product_name,pr.sku,pr.uom,su.code sale_uom,pb.lot_number
             FROM sale_items si
             JOIN products pr ON si.product_id=pr.id AND pr.business_id=si.business_id
+            JOIN units_of_measure su ON su.id=si.sale_uom_id
             LEFT JOIN product_batches pb ON pb.id=si.batch_id AND pb.business_id=si.business_id
             WHERE si.sale_id=? AND si.business_id=?
         ";
@@ -890,8 +895,8 @@ if (isset($_GET['view_id'])):
         <tr>
           <td><span class="code-badge"><?php echo e($it['sku']); ?></span></td>
           <td class="td-name"><?php echo e($it['product_name']); ?><?php if ($it['lot_number']): ?><small style="display:block;color:var(--text3)">Lot <?php echo e($it['lot_number']); ?></small><?php endif; ?></td>
-          <td><?php echo (float)$it['quantity']; ?> (${"<?php echo e($it['uom']); ?>"})</td>
-          <td><?php echo formatCurrency($it['unit_price'], $bizCur); ?></td>
+          <td><?php echo e(formatInventoryDecimal($it['sale_quantity']).' '.$it['sale_uom']); ?></td>
+          <td><?php echo formatCurrency($it['sale_unit_price'], $bizCur); ?> / <?php echo e($it['sale_uom']); ?></td>
           <td class="td-bold" style="color:var(--green);">${"<?php echo formatCurrency($it['line_total'], $bizCur); ?>"}</td>
         </tr>
       `;
@@ -971,7 +976,7 @@ if ($canRefundSale && isset($_GET['return_id'])):
     mysqli_stmt_execute($returnSaleStmt);
     $returnSale = mysqli_fetch_assoc(mysqli_stmt_get_result($returnSaleStmt));
     if ($returnSale):
-        $returnItemsStmt = mysqli_prepare($conn, "SELECT si.id,si.quantity,si.unit_price,p.name,p.sku,p.uom,COALESCE((SELECT SUM(sri.quantity) FROM sale_return_items sri JOIN sale_returns sr ON sr.id=sri.sale_return_id WHERE sri.sale_item_id=si.id AND sr.status='COMPLETED'),0) returned_quantity FROM sale_items si JOIN products p ON p.id=si.product_id AND p.business_id=si.business_id WHERE si.sale_id=? AND si.business_id=? ORDER BY si.id");
+        $returnItemsStmt = mysqli_prepare($conn, "SELECT si.id,si.sale_quantity,si.sale_unit_price,si.conversion_factor_to_base,si.quantity,si.unit_price,p.name,p.sku,p.uom,su.code sale_uom,COALESCE((SELECT SUM(sri.quantity) FROM sale_return_items sri JOIN sale_returns sr ON sr.id=sri.sale_return_id WHERE sri.sale_item_id=si.id AND sr.status='COMPLETED'),0) returned_quantity FROM sale_items si JOIN products p ON p.id=si.product_id AND p.business_id=si.business_id JOIN units_of_measure su ON su.id=si.sale_uom_id WHERE si.sale_id=? AND si.business_id=? ORDER BY si.id");
         mysqli_stmt_bind_param($returnItemsStmt, 'ii', $returnSaleId, $businessId);
         mysqli_stmt_execute($returnItemsStmt);
         $returnItems = mysqli_stmt_get_result($returnItemsStmt);
@@ -986,8 +991,8 @@ if ($canRefundSale && isset($_GET['return_id'])):
         <input type="hidden" name="action" value="return_sale"><input type="hidden" name="sale_id" value="<?php echo $returnSaleId; ?>">
         <div class="form-grid"><div class="field"><label>Return Number</label><div class="field-wrap"><input name="return_number" value="RET-<?php echo e($localNow->format('YmdHis')); ?>" required></div></div><div class="field"><label>Returned At</label><div class="field-wrap"><input type="datetime-local" name="returned_at" value="<?php echo e($localNow->format('Y-m-d\TH:i')); ?>" required></div></div></div>
         <div class="sales-table-scroll"><table class="data-table"><thead><tr><th>Product</th><th>Sold</th><th>Already Returned</th><th>Return Now</th><th>Disposition</th><th>Unit Price</th></tr></thead><tbody>
-        <?php while ($returnItem = mysqli_fetch_assoc($returnItems)): $returnable = max(0, (float)$returnItem['quantity'] - (float)$returnItem['returned_quantity']); ?>
-          <tr><td><span class="code-badge"><?php echo e($returnItem['sku']); ?></span> <?php echo e($returnItem['name']); ?></td><td><?php echo number_format((float)$returnItem['quantity'], 4); ?> <?php echo e($returnItem['uom']); ?></td><td><?php echo number_format((float)$returnItem['returned_quantity'], 4); ?></td><td><input type="hidden" name="sale_item_ids[]" value="<?php echo (int)$returnItem['id']; ?>"><input type="number" name="return_quantities[]" min="0" max="<?php echo e(number_format($returnable, 4, '.', '')); ?>" step="0.0001" value="0" <?php echo $returnable <= 0 ? 'readonly' : ''; ?>></td><td><select name="dispositions[]"><option value="RESTOCK">Usable - return to stock</option><option value="NO_RESTOCK">Refund only - do not restock</option></select></td><td><?php echo formatCurrency($returnItem['unit_price'], $bizCur); ?></td></tr>
+        <?php while ($returnItem = mysqli_fetch_assoc($returnItems)): $returnable = max(0, (float)$returnItem['quantity'] - (float)$returnItem['returned_quantity']);$factor=(float)$returnItem['conversion_factor_to_base'];$returnedEntered=convertBaseQuantityToTransaction($returnItem['returned_quantity'],$factor);$returnableEntered=convertBaseQuantityToTransaction($returnable,$factor); ?>
+          <tr><td><span class="code-badge"><?php echo e($returnItem['sku']); ?></span> <?php echo e($returnItem['name']); ?></td><td><?php echo e(formatInventoryDecimal($returnItem['sale_quantity']).' '.$returnItem['sale_uom']); ?></td><td><?php echo e(formatInventoryDecimal($returnedEntered).' '.$returnItem['sale_uom']); ?></td><td><input type="hidden" name="sale_item_ids[]" value="<?php echo (int)$returnItem['id']; ?>"><input type="number" name="return_quantities[]" min="0" max="<?php echo e(number_format($returnableEntered, 4, '.', '')); ?>" step="0.0001" value="0" <?php echo $returnable <= 0 ? 'readonly' : ''; ?>></td><td><select name="dispositions[]"><option value="RESTOCK">Usable - return to stock</option><option value="NO_RESTOCK">Refund only - do not restock</option></select></td><td><?php echo formatCurrency($returnItem['sale_unit_price'], $bizCur); ?> / <?php echo e($returnItem['sale_uom']); ?></td></tr>
         <?php endwhile; ?>
         </tbody></table></div>
         <div class="field"><label>Reason</label><div class="field-wrap"><textarea name="reason" rows="3" required placeholder="Reason and condition of returned goods"></textarea></div></div>

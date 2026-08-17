@@ -54,9 +54,10 @@ try {
         $locationId = (int)($_POST['location_id'] ?? 0);
         $notes = trim((string)($_POST['notes'] ?? '')) ?: null;
         $productIds = is_array($_POST['product_ids'] ?? null) ? $_POST['product_ids'] : [];
+        $purchaseUomIds = is_array($_POST['purchase_uom_ids'] ?? null) ? $_POST['purchase_uom_ids'] : [];
         $quantities = is_array($_POST['quantities'] ?? null) ? $_POST['quantities'] : [];
         $unitCosts = is_array($_POST['unit_costs'] ?? null) ? $_POST['unit_costs'] : [];
-        $unitSellingPrices = is_array($_POST['unit_selling_prices'] ?? null) ? $_POST['unit_selling_prices'] : [];
+        $salesAmounts = is_array($_POST['sales_amounts'] ?? null) ? $_POST['sales_amounts'] : [];
         $expiryDates = is_array($_POST['expiry_dates'] ?? null) ? $_POST['expiry_dates'] : [];
         $settlementType = strtoupper(trim((string)($_POST['settlement_type'] ?? 'DEBT')));
         $paymentAmountInput = trim((string)($_POST['payment_amount'] ?? ''));
@@ -89,7 +90,7 @@ try {
 
         mysqli_begin_transaction($conn);
         try {
-            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_CREATE', ['purchase_number'=>$purchaseNumber,'purchase_type'=>$purchaseType,'date'=>$purchaseDateInput,'supplier_id'=>$supplierId,'location_id'=>$locationId,'products'=>$productIds,'quantities'=>$quantities,'costs'=>$unitCosts,'selling_prices'=>$unitSellingPrices,'settlement_type'=>$settlementType,'payment_method'=>$settlementType==='PAID'?$paymentMethod:null,'payment_phone'=>$paymentPhone,'bank_name'=>$bankName,'bank_account_number'=>$bankAccountNumber]);
+            claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'PURCHASE_CREATE', ['purchase_number'=>$purchaseNumber,'purchase_type'=>$purchaseType,'date'=>$purchaseDateInput,'supplier_id'=>$supplierId,'location_id'=>$locationId,'products'=>$productIds,'purchase_uom_ids'=>$purchaseUomIds,'quantities'=>$quantities,'costs'=>$unitCosts,'sales_amounts'=>$salesAmounts,'expiry_dates'=>$expiryDates,'settlement_type'=>$settlementType,'payment_method'=>$settlementType==='PAID'?$paymentMethod:null,'payment_phone'=>$paymentPhone,'bank_name'=>$bankName,'bank_account_number'=>$bankAccountNumber]);
             $supplierStmt = mysqli_prepare($conn, 'SELECT id FROM suppliers WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
             mysqli_stmt_bind_param($supplierStmt, 'ii', $supplierId, $businessId);
             mysqli_stmt_execute($supplierStmt);
@@ -116,25 +117,47 @@ try {
             $purchaseId = mysqli_insert_id($conn);
             $subtotal = 0.0;
             $validItems = 0;
+            $transactionUnits = [];
 
             foreach ($productIds as $index => $rawProductId) {
                 $productId = (int)$rawProductId;
-                $quantity = (float)($quantities[$index] ?? 0);
-                $unitCost = (float)($unitCosts[$index] ?? 0);
-                $unitSellingPrice = (float)($unitSellingPrices[$index] ?? -1);
-                if ($productId <= 0 || $quantity <= 0) continue;
-                if ($unitCost < 0 || $unitSellingPrice < 0) throw new InvalidArgumentException('Cost price and selling price must be non-negative for every purchase item.');
-                $productStmt = mysqli_prepare($conn, 'SELECT id,name,track_batches,track_expiry FROM products WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
+                $purchaseUomId = (int)($purchaseUomIds[$index] ?? 0);
+                $purchaseQuantity = normalizeInventoryDecimal($quantities[$index] ?? 0, 'Purchase quantity');
+                $purchaseUnitCost = normalizeInventoryDecimal($unitCosts[$index] ?? 0, 'Purchase unit cost');
+                if ($productId <= 0 || $purchaseQuantity <= 0) continue;
+                if ($purchaseUnitCost < 0) throw new InvalidArgumentException('Purchase price cannot be negative.');
+                $productStmt = mysqli_prepare($conn, 'SELECT id,name,uom_id,uom,sale_price,package_uom_id,units_per_package,package_sale_price,track_batches,track_expiry FROM products WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
                 mysqli_stmt_bind_param($productStmt, 'ii', $productId, $businessId);
                 mysqli_stmt_execute($productStmt);
                 $product = mysqli_fetch_assoc(mysqli_stmt_get_result($productStmt));
                 if (!$product) throw new RuntimeException('One selected product is unavailable.');
+                $transactionUom = resolveProductTransactionUom($conn, $businessId, $product, $purchaseUomId);
+                $conversionFactor = (float)$transactionUom['factor'];
+                $baseQuantity = convertTransactionQuantityToBase($purchaseQuantity, $conversionFactor);
+                $baseUnitCost = convertTransactionUnitPriceToBase($purchaseUnitCost, $conversionFactor, 'Purchase unit cost');
+                $salesAmountInput = trim((string)($salesAmounts[$index] ?? ''));
+                if ($salesAmountInput === '') {
+                    throw new InvalidArgumentException('Enter the sales amount for one ' . $transactionUom['code'] . ' of ' . $product['name'] . '.');
+                }
+                $salesAmount = normalizeInventoryDecimal($salesAmountInput, 'Sales amount');
+                if ($salesAmount < 0) throw new InvalidArgumentException('Sales amount cannot be negative.');
+                $packageSellingPrice = $product['package_sale_price'] === null ? null : (float)$product['package_sale_price'];
+                $unitSellingPrice = $salesAmount;
+                if ($transactionUom['is_package']) {
+                    $packageSellingPrice = $salesAmount;
+                    $unitSellingPrice = convertTransactionUnitPriceToBase($salesAmount, $conversionFactor, 'Sales amount');
+                }
+
+                $expiryDate = trim((string)($expiryDates[$index] ?? '')) ?: null;
+                if ($expiryDate !== null) {
+                    $dateParts = array_map('intval', explode('-', $expiryDate));
+                    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $expiryDate) || count($dateParts) !== 3 || !checkdate($dateParts[1], $dateParts[2], $dateParts[0])) {
+                        throw new InvalidArgumentException('Enter a valid expiry date for ' . $product['name'] . '.');
+                    }
+                }
 
                 $batchId = null;
                 if ((int)$product['track_batches'] === 1) {
-                    $expiryDate = trim((string)($expiryDates[$index] ?? '')) ?: null;
-                    if ((int)$product['track_expiry'] === 1 && $expiryDate === null) throw new RuntimeException('Enter an expiry date for ' . $product['name'] . '.');
-
                     $lotNumber = generateUniqueCompanyBatchNumber($conn, $businessId, (string)$business['business_name']);
                     $batchInsert = mysqli_prepare($conn, 'INSERT INTO product_batches (business_id,product_id,lot_number,expires_at,created_at) VALUES (?,?,?,?,UTC_TIMESTAMP(6))');
                     mysqli_stmt_bind_param($batchInsert, 'iiss', $businessId, $productId, $lotNumber, $expiryDate);
@@ -142,9 +165,9 @@ try {
                     $batchId = mysqli_insert_id($conn);
                 }
 
-                $lineTotal = $quantity * $unitCost;
-                $itemStmt = mysqli_prepare($conn, 'INSERT INTO purchase_items (business_id,purchase_id,product_id,batch_id,ordered_quantity,received_quantity,unit_cost,unit_selling_price,discount_amount,tax_amount,line_total,created_at) VALUES (?,?,?,?,?,0,?,?,0,0,?,UTC_TIMESTAMP(6))');
-                mysqli_stmt_bind_param($itemStmt, 'iiiidddd', $businessId, $purchaseId, $productId, $batchId, $quantity, $unitCost, $unitSellingPrice, $lineTotal);
+                $lineTotal = normalizeInventoryDecimal($purchaseQuantity * $purchaseUnitCost, 'Purchase line total');
+                $itemStmt = mysqli_prepare($conn, 'INSERT INTO purchase_items (business_id,purchase_id,product_id,batch_id,purchase_uom_id,purchase_quantity,conversion_factor_to_base,purchase_unit_cost,ordered_quantity,received_quantity,unit_cost,unit_selling_price,package_selling_price,discount_amount,tax_amount,line_total,expiry_date,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,0,0,?,?,UTC_TIMESTAMP(6))');
+                mysqli_stmt_bind_param($itemStmt, 'iiiiidddddddds', $businessId, $purchaseId, $productId, $batchId, $purchaseUomId, $purchaseQuantity, $conversionFactor, $purchaseUnitCost, $baseQuantity, $baseUnitCost, $unitSellingPrice, $packageSellingPrice, $lineTotal, $expiryDate);
                 if (!mysqli_stmt_execute($itemStmt)) throw new RuntimeException('A purchase item could not be saved.');
                 $purchaseItemId = mysqli_insert_id($conn);
                 if ($purchaseType === 'DIRECT') {
@@ -157,18 +180,19 @@ try {
                         'product_id'=>$productId,
                         'batch_id'=>$batchId,
                         'movement_type'=>'PURCHASE_RECEIPT',
-                        'quantity_delta'=>$quantity,
-                        'unit_cost'=>$unitCost,
+                        'quantity_delta'=>$baseQuantity,
+                        'unit_cost'=>$baseUnitCost,
                         'occurred_at'=>$purchaseDate,
                         'purchase_item_id'=>$purchaseItemId,
                         'created_by_membership_id'=>$membershipId,
                         'notes'=>$purchaseNumber . ' automatic direct-purchase receipt',
                         'config'=>$config
                     ]);
-                    $priceStmt = mysqli_prepare($conn, 'UPDATE products SET sale_price=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
-                    mysqli_stmt_bind_param($priceStmt, 'dii', $unitSellingPrice, $productId, $businessId);
+                    $priceStmt = mysqli_prepare($conn, 'UPDATE products SET sale_price=?,package_sale_price=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
+                    mysqli_stmt_bind_param($priceStmt, 'ddii', $unitSellingPrice, $packageSellingPrice, $productId, $businessId);
                     if (!mysqli_stmt_execute($priceStmt)) throw new RuntimeException('The product selling price could not be updated.');
                 }
+                $transactionUnits[] = ['product_id'=>$productId,'selected_uom_id'=>$purchaseUomId,'selected_uom_code'=>$transactionUom['code'],'entered_quantity'=>$purchaseQuantity,'conversion_factor_to_base'=>$conversionFactor,'base_quantity'=>$baseQuantity,'entered_unit_cost'=>$purchaseUnitCost,'normalized_base_cost'=>$baseUnitCost,'entered_sales_amount'=>$salesAmount,'normalized_base_selling_price'=>$unitSellingPrice,'package_selling_price'=>$packageSellingPrice,'expiry_date'=>$expiryDate];
                 $subtotal += $lineTotal;
                 $validItems++;
             }
@@ -194,7 +218,7 @@ try {
                 mysqli_stmt_bind_param($receivePurchase, 'siii', $purchaseDate, $membershipId, $purchaseId, $businessId);
                 if (!mysqli_stmt_execute($receivePurchase)) throw new RuntimeException('The direct purchase could not be completed as received.');
             }
-            writeAuditLog($conn, $businessId, $purchaseType === 'DIRECT' ? 'DIRECT_PURCHASE_CREATED_AND_RECEIVED' : 'PURCHASE_ORDER_CREATED', 'purchase', $purchaseId, ['purchase_number'=>$purchaseNumber,'purchase_type'=>$purchaseType,'initial_status'=>$purchaseType==='DIRECT'?'RECEIVED':$initialStatus,'total_amount'=>$subtotal,'items'=>$validItems,'payment_status'=>$paymentStatus,'amount_paid'=>$amountPaid,'remaining_balance'=>max(0,$subtotal-$amountPaid),'payment_method'=>$settlementType==='PAID'?$paymentMethod:null]);
+            writeAuditLog($conn, $businessId, $purchaseType === 'DIRECT' ? 'DIRECT_PURCHASE_CREATED_AND_RECEIVED' : 'PURCHASE_ORDER_CREATED', 'purchase', $purchaseId, ['purchase_number'=>$purchaseNumber,'purchase_type'=>$purchaseType,'initial_status'=>$purchaseType==='DIRECT'?'RECEIVED':$initialStatus,'total_amount'=>$subtotal,'items'=>$validItems,'transaction_units'=>$transactionUnits,'payment_status'=>$paymentStatus,'amount_paid'=>$amountPaid,'remaining_balance'=>max(0,$subtotal-$amountPaid),'payment_method'=>$settlementType==='PAID'?$paymentMethod:null]);
             completeIdempotencyKey($conn, $businessId, $idempotencyKey, 201, ['purchase_id'=>$purchaseId]);
             mysqli_commit($conn);
             if ($purchaseType === 'DIRECT') {
@@ -426,33 +450,39 @@ try {
 
             $receivedLines = 0;
             $receivedValue = 0.0;
+            $receiptUnits = [];
             foreach ($itemIds as $index => $rawItemId) {
                 $itemId = (int)$rawItemId;
                 if ($itemId <= 0) continue;
-                $itemStmt = mysqli_prepare($conn, 'SELECT pi.product_id,pi.batch_id,pi.ordered_quantity,pi.received_quantity,pi.unit_cost,pi.unit_selling_price,p.name FROM purchase_items pi JOIN products p ON p.id=pi.product_id AND p.business_id=pi.business_id WHERE pi.id=? AND pi.purchase_id=? AND pi.business_id=? FOR UPDATE');
+                $itemStmt = mysqli_prepare($conn, 'SELECT pi.product_id,pi.batch_id,pi.purchase_uom_id,pi.conversion_factor_to_base,pi.ordered_quantity,pi.received_quantity,pi.unit_cost,pi.unit_selling_price,pi.package_selling_price,p.name,u.code purchase_uom FROM purchase_items pi JOIN products p ON p.id=pi.product_id AND p.business_id=pi.business_id JOIN units_of_measure u ON u.id=pi.purchase_uom_id WHERE pi.id=? AND pi.purchase_id=? AND pi.business_id=? FOR UPDATE');
                 mysqli_stmt_bind_param($itemStmt, 'iii', $itemId, $purchaseId, $businessId);
                 mysqli_stmt_execute($itemStmt);
                 $item = mysqli_fetch_assoc(mysqli_stmt_get_result($itemStmt));
                 if (!$item) throw new RuntimeException('A purchase line is invalid.');
                 $remaining = (float)$item['ordered_quantity'] - (float)$item['received_quantity'];
                 if ($remaining <= 0.00005) continue;
-                $receiveNow = $requestedReceiptStatus === 'RECEIVED' ? $remaining : (float)($receivedQuantities[$index] ?? 0);
-                if ($receiveNow < 0) throw new InvalidArgumentException('Received quantity cannot be negative.');
-                if ($receiveNow == 0.0) continue;
-                if ($receiveNow > $remaining + 0.00005) throw new RuntimeException('Receipt for ' . $item['name'] . ' exceeds the remaining ordered quantity of ' . number_format($remaining, 4, '.', '') . '.');
-                $newReceived = (float)$item['received_quantity'] + $receiveNow;
+                $factor = normalizeInventoryDecimal($item['conversion_factor_to_base'], 'Purchase conversion factor');
+                $enteredReceiveQuantity = $requestedReceiptStatus === 'RECEIVED'
+                    ? convertBaseQuantityToTransaction($remaining, $factor)
+                    : normalizeInventoryDecimal($receivedQuantities[$index] ?? 0, 'Received quantity');
+                if ($enteredReceiveQuantity < 0) throw new InvalidArgumentException('Received quantity cannot be negative.');
+                if ($enteredReceiveQuantity == 0.0) continue;
+                $receiveNowBase = $requestedReceiptStatus === 'RECEIVED' ? $remaining : convertTransactionQuantityToBase($enteredReceiveQuantity, $factor);
+                if ($receiveNowBase > $remaining + 0.00005) throw new RuntimeException('Receipt for ' . $item['name'] . ' exceeds the remaining ordered quantity of ' . formatInventoryDecimal(convertBaseQuantityToTransaction($remaining, $factor)) . ' ' . $item['purchase_uom'] . '.');
+                $newReceived = normalizeInventoryDecimal((float)$item['received_quantity'] + $receiveNowBase, 'Received base quantity');
                 $updateItem = mysqli_prepare($conn, 'UPDATE purchase_items SET received_quantity=? WHERE id=? AND purchase_id=? AND business_id=?');
                 mysqli_stmt_bind_param($updateItem, 'diii', $newReceived, $itemId, $purchaseId, $businessId);
                 mysqli_stmt_execute($updateItem);
                 applyInventoryMovement($conn, [
                     'business_id'=>$businessId,'location_id'=>$purchase['location_id'],'product_id'=>$item['product_id'],'batch_id'=>$item['batch_id'],
-                    'movement_type'=>'PURCHASE_RECEIPT','quantity_delta'=>$receiveNow,'unit_cost'=>$item['unit_cost'],'occurred_at'=>$receivedAt,
+                    'movement_type'=>'PURCHASE_RECEIPT','quantity_delta'=>$receiveNowBase,'unit_cost'=>$item['unit_cost'],'occurred_at'=>$receivedAt,
                     'purchase_item_id'=>$itemId,'created_by_membership_id'=>$membershipId,'notes'=>$purchase['purchase_number'] . ' goods receipt','config'=>$config
                 ]);
-                $priceStmt = mysqli_prepare($conn, 'UPDATE products SET sale_price=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
-                mysqli_stmt_bind_param($priceStmt, 'dii', $item['unit_selling_price'], $item['product_id'], $businessId);
+                $priceStmt = mysqli_prepare($conn, 'UPDATE products SET sale_price=?,package_sale_price=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
+                mysqli_stmt_bind_param($priceStmt, 'ddii', $item['unit_selling_price'], $item['package_selling_price'], $item['product_id'], $businessId);
                 if (!mysqli_stmt_execute($priceStmt)) throw new RuntimeException('The product selling price could not be updated.');
-                $receivedValue += $receiveNow * (float)$item['unit_cost'];
+                $receivedValue += $receiveNowBase * (float)$item['unit_cost'];
+                $receiptUnits[] = ['product_id'=>(int)$item['product_id'],'selected_uom_id'=>(int)$item['purchase_uom_id'],'selected_uom_code'=>$item['purchase_uom'],'entered_quantity'=>$enteredReceiveQuantity,'conversion_factor_to_base'=>$factor,'base_quantity'=>$receiveNowBase,'normalized_base_cost'=>(float)$item['unit_cost']];
                 $receivedLines++;
             }
             if ($receivedLines === 0) throw new InvalidArgumentException('Enter a received quantity for at least one item.');
@@ -471,7 +501,7 @@ try {
                 mysqli_stmt_bind_param($updatePurchase, 'sisii', $newStatus, $membershipId, $supplierInvoice, $purchaseId, $businessId);
             }
             if (!mysqli_stmt_execute($updatePurchase)) throw new RuntimeException('Purchase receipt status could not be updated.');
-            writeAuditLog($conn, $businessId, 'PURCHASE_RECEIVED', 'purchase', $purchaseId, ['purchase_number'=>$purchase['purchase_number'],'receipt_value'=>$receivedValue,'lines'=>$receivedLines,'requested_status'=>$requestedReceiptStatus,'status'=>$newStatus]);
+            writeAuditLog($conn, $businessId, 'PURCHASE_RECEIVED', 'purchase', $purchaseId, ['purchase_number'=>$purchase['purchase_number'],'receipt_value'=>$receivedValue,'lines'=>$receivedLines,'transaction_units'=>$receiptUnits,'requested_status'=>$requestedReceiptStatus,'status'=>$newStatus]);
             completeIdempotencyKey($conn, $businessId, $idempotencyKey, 200, ['purchase_id'=>$purchaseId,'status'=>$newStatus]);
             mysqli_commit($conn);
             $finish($newStatus === 'RECEIVED' ? 'Purchase fully received and stock updated.' : 'Partial receipt posted. Remaining quantities are still open.', 'success');
@@ -507,17 +537,20 @@ try {
             $purchaseReturnId = mysqli_insert_id($conn);
             $returnValue = 0.0;
             $returnedLines = 0;
+            $returnUnits = [];
             foreach ($itemIds as $index => $rawItemId) {
                 $itemId = (int)$rawItemId;
-                $quantity = (float)($quantities[$index] ?? 0);
-                if ($itemId <= 0 || $quantity <= 0) continue;
-                $itemStmt = mysqli_prepare($conn, "SELECT pi.product_id,pi.batch_id,pi.received_quantity,pi.unit_cost,p.name,COALESCE((SELECT SUM(pri.quantity) FROM purchase_return_items pri JOIN purchase_returns pr ON pr.id=pri.purchase_return_id WHERE pri.purchase_item_id=pi.id AND pr.status='COMPLETED'),0) returned_quantity FROM purchase_items pi JOIN products p ON p.id=pi.product_id AND p.business_id=pi.business_id WHERE pi.id=? AND pi.purchase_id=? AND pi.business_id=? FOR UPDATE");
+                $enteredQuantity = normalizeInventoryDecimal($quantities[$index] ?? 0, 'Purchase return quantity');
+                if ($itemId <= 0 || $enteredQuantity <= 0) continue;
+                $itemStmt = mysqli_prepare($conn, "SELECT pi.product_id,pi.batch_id,pi.purchase_uom_id,pi.conversion_factor_to_base,pi.received_quantity,pi.unit_cost,p.name,u.code purchase_uom,COALESCE((SELECT SUM(pri.quantity) FROM purchase_return_items pri JOIN purchase_returns pr ON pr.id=pri.purchase_return_id WHERE pri.purchase_item_id=pi.id AND pr.status='COMPLETED'),0) returned_quantity FROM purchase_items pi JOIN products p ON p.id=pi.product_id AND p.business_id=pi.business_id JOIN units_of_measure u ON u.id=pi.purchase_uom_id WHERE pi.id=? AND pi.purchase_id=? AND pi.business_id=? FOR UPDATE");
                 mysqli_stmt_bind_param($itemStmt, 'iii', $itemId, $purchaseId, $businessId);
                 mysqli_stmt_execute($itemStmt);
                 $item = mysqli_fetch_assoc(mysqli_stmt_get_result($itemStmt));
                 if (!$item) throw new RuntimeException('A purchase return item is invalid.');
+                $factor = normalizeInventoryDecimal($item['conversion_factor_to_base'], 'Purchase conversion factor');
+                $quantity = convertTransactionQuantityToBase($enteredQuantity, $factor);
                 $returnable = (float)$item['received_quantity'] - (float)$item['returned_quantity'];
-                if ($quantity > $returnable + .00005) throw new RuntimeException('Return for ' . $item['name'] . ' exceeds the received quantity still returnable.');
+                if ($quantity > $returnable + .00005) throw new RuntimeException('Return for ' . $item['name'] . ' exceeds the ' . formatInventoryDecimal(convertBaseQuantityToTransaction($returnable, $factor)) . ' ' . $item['purchase_uom'] . ' still returnable.');
                 $unitCost = (float)$item['unit_cost'];
                 if ($config['inventory_valuation_method'] === 'FIFO') {
                     $fifo = consumeFifoCost($conn, $businessId, (int)$purchase['location_id'], (int)$item['product_id'], $quantity, !empty($item['batch_id']) ? (int)$item['batch_id'] : null);
@@ -534,10 +567,11 @@ try {
                     'purchase_return_item_id'=>$returnItemId,'created_by_membership_id'=>$membershipId,'notes'=>$returnNumber . ' / ' . $purchase['purchase_number'],'config'=>$config
                 ]);
                 $returnValue += $lineTotal;
+                $returnUnits[] = ['product_id'=>(int)$item['product_id'],'selected_uom_id'=>(int)$item['purchase_uom_id'],'selected_uom_code'=>$item['purchase_uom'],'entered_quantity'=>$enteredQuantity,'conversion_factor_to_base'=>$factor,'base_quantity'=>$quantity,'normalized_base_cost'=>$unitCost];
                 $returnedLines++;
             }
             if ($returnedLines === 0) throw new InvalidArgumentException('Enter at least one purchase return quantity.');
-            writeAuditLog($conn, $businessId, 'PURCHASE_RETURNED', 'purchase_return', $purchaseReturnId, ['purchase_id'=>$purchaseId,'return_number'=>$returnNumber,'return_value'=>$returnValue,'lines'=>$returnedLines]);
+            writeAuditLog($conn, $businessId, 'PURCHASE_RETURNED', 'purchase_return', $purchaseReturnId, ['purchase_id'=>$purchaseId,'return_number'=>$returnNumber,'return_value'=>$returnValue,'lines'=>$returnedLines,'transaction_units'=>$returnUnits]);
             completeIdempotencyKey($conn, $businessId, $idempotencyKey, 201, ['purchase_return_id'=>$purchaseReturnId]);
             mysqli_commit($conn);
             $finish('Purchase return completed and stock reduced.', 'success');

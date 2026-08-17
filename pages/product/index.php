@@ -39,9 +39,10 @@ mysqli_stmt_execute($countStmt);
 $totalRows = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($countStmt))['total'] ?? 0);
 $totalPages = (int)ceil($totalRows / $limit);
 
-$productStmt = mysqli_prepare($conn, "SELECT p.id,p.sku,p.name,p.category_id,p.uom_id,p.uom,p.is_active,pc.name category_name
+$productStmt = mysqli_prepare($conn, "SELECT p.id,p.sku,p.name,p.category_id,p.uom_id,p.uom,p.package_uom_id,p.units_per_package,p.package_sale_price,p.is_active,pc.name category_name,pu.code package_uom
     FROM products p
     JOIN product_categories pc ON pc.id=p.category_id AND pc.business_id=p.business_id
+    LEFT JOIN units_of_measure pu ON pu.id=p.package_uom_id
     $where ORDER BY p.name,p.sku LIMIT ? OFFSET ?");
 $listParams = array_merge($params, [$limit, $offset]);
 $listTypes = $types . 'ii';
@@ -105,7 +106,7 @@ $queryBase = array_filter([
           <option value="<?php echo (int)$category['id']; ?>" <?php echo $categoryFilter === (int)$category['id'] ? 'selected' : ''; ?>><?php echo e($category['name']); ?><?php echo (int)$category['is_active'] === 0 ? ' (Inactive)' : ''; ?></option>
         <?php endforeach; ?>
       </select>
-      <input name="search" value="<?php echo e($search); ?>" placeholder="Search by SKU or product name">
+      <input name="search" value="<?php echo e($search); ?>" placeholder="Search by product code or name">
       <button class="btn-sm" type="submit">Filter</button>
       <?php if ($search !== '' || $categoryFilter > 0): ?><a class="btn-sm clear-filter" href="index.php<?php echo e($roleQuery); ?>">Clear</a><?php endif; ?>
     </form>
@@ -113,7 +114,7 @@ $queryBase = array_filter([
 
   <div class="product-table-wrap">
     <table class="data-table product-table">
-      <thead><tr><th>SKU</th><th>Product Name</th><th>Category</th><th>Unit of Measure</th><th>Status</th><th class="action-column">Actions</th></tr></thead>
+      <thead><tr><th>Product Code</th><th>Product Name</th><th>Category</th><th>Base / Package Units</th><th>Status</th><th class="action-column">Actions</th></tr></thead>
       <tbody>
         <?php if (mysqli_num_rows($products) === 0): ?>
           <tr><td colspan="6" class="product-empty">No products match the selected filters.</td></tr>
@@ -122,7 +123,7 @@ $queryBase = array_filter([
             <td><span class="code-badge"><?php echo e($product['sku']); ?></span></td>
             <td class="td-name"><?php echo e($product['name']); ?></td>
             <td><?php echo e($product['category_name']); ?></td>
-            <td><span class="uom-badge"><?php echo e($product['uom']); ?></span></td>
+            <td><span class="uom-badge"><?php echo e($product['uom']); ?></span><?php if ($product['package_uom_id']): ?><small class="package-summary">1 <?php echo e($product['package_uom']); ?> = <?php echo e(formatInventoryDecimal($product['units_per_package'])); ?> <?php echo e($product['uom']); ?></small><?php endif; ?></td>
             <td><span class="status-pill <?php echo (int)$product['is_active'] === 1 ? 'pill-green' : 'pill-red'; ?>"><?php echo (int)$product['is_active'] === 1 ? 'Active' : 'Inactive'; ?></span></td>
             <td class="action-column">
               <?php if ($canUpdateProduct): ?>
@@ -161,10 +162,16 @@ $queryBase = array_filter([
         <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>">
         <input type="hidden" name="action" id="product_action" value="create">
         <input type="hidden" name="product_id" id="product_id">
-        <label>SKU Code <span>*</span><input name="sku" id="product_sku" maxlength="100" placeholder="e.g. WATER-500" required></label>
         <label>Product Name <span>*</span><input name="name" id="product_name" maxlength="200" placeholder="e.g. Mineral Water 500ml" required></label>
         <label>Product Category <span>*</span><select name="category_id" id="product_category" required><option value="">Choose a category</option><?php foreach ($categoryOptions as $category): if ((int)$category['is_active'] !== 1) continue; ?><option value="<?php echo (int)$category['id']; ?>"><?php echo e($category['name']); ?></option><?php endforeach; ?></select><small><a href="../product_category/index.php<?php echo e($roleQuery); ?>">Manage categories</a></small></label>
-        <label>Unit of Measure <span>*</span><select name="uom" id="product_uom" required><option value="">Choose a unit</option><?php foreach ($uomOptions as $unit): ?><option value="<?php echo (int)$unit['id']; ?>"><?php echo e($unit['name']); ?> (<?php echo e($unit['code']); ?>)</option><?php endforeach; ?></select><small><a href="../unit/index.php<?php echo e($roleQuery); ?>">Manage units of measure</a></small></label>
+        <label>Base Unit of Measure <span>*</span><select name="uom" id="product_uom" required onchange="syncProductPackageFields()"><option value="">Choose a unit</option><?php foreach ($uomOptions as $unit): ?><option value="<?php echo (int)$unit['id']; ?>" data-code="<?php echo e($unit['code']); ?>"><?php echo e($unit['name']); ?> (<?php echo e($unit['code']); ?>)</option><?php endforeach; ?></select><small><a href="../unit/index.php<?php echo e($roleQuery); ?>">Manage units of measure</a></small></label>
+        <label class="product-package-toggle"><input type="checkbox" name="has_package" id="product_has_package" value="1" onchange="syncProductPackageFields()"><span>This product uses a package / outer unit</span></label>
+        <div class="product-package-fields" id="product_package_fields" hidden>
+          <label>Package Unit <span>*</span><select name="package_uom_id" id="product_package_uom" onchange="syncProductPackageHint()"><option value="">Choose a package unit</option><?php foreach ($uomOptions as $unit): ?><option value="<?php echo (int)$unit['id']; ?>" data-code="<?php echo e($unit['code']); ?>"><?php echo e($unit['name']); ?> (<?php echo e($unit['code']); ?>)</option><?php endforeach; ?></select></label>
+          <label>Units per Package <span>*</span><input type="number" name="units_per_package" id="product_units_per_package" min=".0001" step=".0001" placeholder="e.g. 8" oninput="syncProductPackageHint()"></label>
+          <label>Package Selling Price <small>Optional</small><input type="number" name="package_sale_price" id="product_package_sale_price" min="0" step=".0001" placeholder="Optional default package price"></label>
+          <p class="product-package-hint" id="product_package_hint">Choose both units and enter the package conversion.</p>
+        </div>
       </div>
       <div class="modal-footer"><button type="button" class="btn-sm" onclick="closeProductModal()">Cancel</button><button type="submit" class="btn-primary" id="productSubmit">Save Product</button></div>
     </form>
@@ -173,7 +180,7 @@ $queryBase = array_filter([
 <?php endif; ?>
 
 <style>
-.products-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:16px}.products-page-head h1{margin:0;color:var(--text);font-size:22px}.products-page-head p,.products-toolbar p,.modal-header p{margin:5px 0 0;color:var(--text3);font-size:11px}.products-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.products-head-actions a{text-decoration:none}.product-summary{display:grid;grid-template-columns:repeat(3,minmax(150px,210px));gap:10px;margin-bottom:14px}.product-summary .card{padding:14px 16px;box-shadow:none}.product-summary span{display:block;color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:.04em}.product-summary strong{display:block;margin-top:7px;color:var(--text);font-size:19px}.products-card{overflow:hidden;box-shadow:none}.products-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:16px;border-bottom:1px solid var(--table-border)}.product-filter{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.product-filter select,.product-filter input{min-height:35px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font:inherit;font-size:11px}.product-filter input{min-width:220px}.clear-filter{text-decoration:none}.product-table-wrap{overflow-x:auto}.product-table{min-width:760px}.product-table td{vertical-align:middle}.uom-badge{display:inline-flex;padding:5px 8px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--text2);font-size:9px;font-weight:650}.action-column{text-align:right!important;white-space:nowrap}.inline-form{display:inline}.status-button{margin-left:4px;background:var(--bg)!important}.muted-action{color:var(--text3);font-size:9px}.product-empty{text-align:center!important;color:var(--text3)!important;padding:36px!important}.product-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 16px;border-top:1px solid var(--table-border);color:var(--text3);font-size:10px}.product-pagination>div{display:flex;gap:6px}.product-pagination a{text-decoration:none}.product-modal-card{width:min(640px,calc(100vw - 28px))}.product-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.product-form-grid>input[type=hidden]{display:none}.product-form-grid label{display:flex;flex-direction:column;gap:6px;color:var(--text2);font-size:10px;font-weight:650}.product-form-grid label>span{color:var(--red)}.product-form-grid input,.product-form-grid select{width:100%;min-height:40px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font:inherit;outline:none}.product-form-grid input:focus,.product-form-grid select:focus{border-color:var(--border-hover)}.product-form-grid small{font-size:9px;font-weight:400}.product-form-grid small a{color:var(--blue);text-decoration:none}@media(max-width:850px){.products-page-head,.products-toolbar{align-items:stretch;flex-direction:column}.products-head-actions,.product-filter{justify-content:flex-start}.product-summary{grid-template-columns:repeat(3,1fr)}}@media(max-width:580px){.product-summary,.product-form-grid{grid-template-columns:1fr}.product-filter{display:grid;grid-template-columns:1fr 1fr}.product-filter input{min-width:0;grid-column:1/-1}.products-head-actions{align-items:stretch;flex-direction:column}.product-pagination{align-items:flex-start;flex-direction:column}}
+.products-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:16px}.products-page-head h1{margin:0;color:var(--text);font-size:22px}.products-page-head p,.products-toolbar p,.modal-header p{margin:5px 0 0;color:var(--text3);font-size:11px}.products-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.products-head-actions a{text-decoration:none}.products-head-actions a{text-decoration:none}.product-summary{display:grid;grid-template-columns:repeat(3,minmax(150px,210px));gap:10px;margin-bottom:14px}.product-summary .card{padding:14px 16px;box-shadow:none}.product-summary span{display:block;color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:.04em}.product-summary strong{display:block;margin-top:7px;color:var(--text);font-size:19px}.products-card{overflow:hidden;box-shadow:none}.products-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:16px;border-bottom:1px solid var(--table-border)}.product-filter{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.product-filter select,.product-filter input{min-height:35px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font:inherit;font-size:11px}.product-filter input{min-width:220px}.clear-filter{text-decoration:none}.product-table-wrap{overflow-x:auto}.product-table{min-width:760px}.product-table td{vertical-align:middle}.uom-badge{display:inline-flex;padding:5px 8px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--text2);font-size:9px;font-weight:650}.package-summary{display:block;margin-top:4px;color:var(--text3);font-size:8.5px}.action-column{text-align:right!important;white-space:nowrap}.inline-form{display:inline}.status-button{margin-left:4px;background:var(--bg)!important}.muted-action{color:var(--text3);font-size:9px}.product-empty{text-align:center!important;color:var(--text3)!important;padding:36px!important}.product-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 16px;border-top:1px solid var(--table-border);color:var(--text3);font-size:10px}.product-pagination>div{display:flex;gap:6px}.product-pagination a{text-decoration:none}.product-modal-card{width:min(720px,calc(100vw - 28px))}.product-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.product-form-grid>input[type=hidden]{display:none}.product-form-grid label{display:flex;flex-direction:column;gap:6px;color:var(--text2);font-size:10px;font-weight:650}.product-form-grid label>span{color:var(--red)}.product-form-grid input:not([type=checkbox]),.product-form-grid select{width:100%;min-height:40px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font:inherit;outline:none}.product-form-grid input:focus,.product-form-grid select:focus{border-color:var(--border-hover)}.product-form-grid small{font-size:9px;font-weight:400}.product-form-grid small a{color:var(--blue);text-decoration:none}.product-package-toggle{grid-column:1/-1!important;display:flex!important;flex-direction:row!important;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)}.product-package-toggle input{width:auto}.product-package-toggle span{color:var(--text2)!important}.product-package-fields{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:13px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)}.product-package-fields[hidden]{display:none}.product-package-hint{grid-column:1/-1;margin:0;padding:9px;border-radius:var(--radius);background:var(--blue-bg);color:var(--blue);font-size:9.5px}@media(max-width:850px){.products-page-head,.products-toolbar{align-items:stretch;flex-direction:column}.products-head-actions,.product-filter{justify-content:flex-start}.product-summary{grid-template-columns:repeat(3,1fr)}}@media(max-width:580px){.product-summary,.product-form-grid,.product-package-fields{grid-template-columns:1fr}.product-filter{display:grid;grid-template-columns:1fr 1fr}.product-filter input{min-width:0;grid-column:1/-1}.products-head-actions{align-items:stretch;flex-direction:column}.product-pagination{align-items:flex-start;flex-direction:column}}
 </style>
 
 <script>
@@ -183,16 +190,35 @@ function openProductModal(product = null) {
   document.getElementById('productForm').reset();
   document.getElementById('product_action').value = product ? 'update' : 'create';
   document.getElementById('product_id').value = product ? product.id : '';
-  document.getElementById('product_sku').value = product ? product.sku : '';
   document.getElementById('product_name').value = product ? product.name : '';
   document.getElementById('product_category').value = product ? product.category_id : '';
   document.getElementById('product_uom').value = product ? product.uom_id : '';
+  document.getElementById('product_has_package').checked = !!(product && product.package_uom_id);
+  document.getElementById('product_package_uom').value = product && product.package_uom_id ? product.package_uom_id : '';
+  document.getElementById('product_units_per_package').value = product && product.units_per_package ? product.units_per_package : '';
+  document.getElementById('product_package_sale_price').value = product && product.package_sale_price !== null ? product.package_sale_price : '';
+  syncProductPackageFields();
   document.getElementById('productModalTitle').textContent = product ? 'Edit Product' : 'Register Product';
   document.getElementById('productModalSubtitle').textContent = product ? 'Update the registered catalog information.' : 'Enter the product\'s catalog information.';
   document.getElementById('productSubmit').textContent = product ? 'Save Changes' : 'Save Product';
   productModal.style.display = 'flex';
   productModal.setAttribute('aria-hidden', 'false');
-  setTimeout(() => document.getElementById('product_sku').focus(), 0);
+  setTimeout(() => document.getElementById('product_name').focus(), 0);
+}
+function syncProductPackageFields() {
+  const enabled=document.getElementById('product_has_package').checked;
+  const fields=document.getElementById('product_package_fields');
+  fields.hidden=!enabled;
+  fields.querySelectorAll('select,input').forEach(input=>{input.disabled=!enabled;});
+  document.getElementById('product_package_uom').required=enabled;
+  document.getElementById('product_units_per_package').required=enabled;
+  syncProductPackageHint();
+}
+function syncProductPackageHint() {
+  const base=document.getElementById('product_uom').selectedOptions[0]?.dataset.code||'';
+  const packageCode=document.getElementById('product_package_uom').selectedOptions[0]?.dataset.code||'';
+  const factor=parseFloat(document.getElementById('product_units_per_package').value||'0');
+  document.getElementById('product_package_hint').textContent=base&&packageCode&&factor>0?`1 ${packageCode} = ${factor.toFixed(4).replace(/\.0000$/,'')} ${base}`:'Choose both units and enter the package conversion.';
 }
 function closeProductModal() { if (!productModal) return; productModal.style.display = 'none'; productModal.setAttribute('aria-hidden', 'true'); }
 productModal?.addEventListener('click', event => { if (event.target === productModal) closeProductModal(); });

@@ -90,11 +90,16 @@ try {
         mysqli_stmt_execute($existingStmt);
         $existing = mysqli_fetch_assoc(mysqli_stmt_get_result($existingStmt));
         if (!$existing) throw new RuntimeException('Only custom units belonging to this company can be deleted.');
-        $usageStmt = mysqli_prepare($conn, 'SELECT COUNT(*) total FROM products WHERE business_id=? AND uom_id=?');
-        mysqli_stmt_bind_param($usageStmt, 'ii', $businessId, $unitId);
+        $usageStmt = mysqli_prepare($conn, 'SELECT
+            (SELECT COUNT(*) FROM products WHERE business_id=? AND uom_id=?) base_products,
+            (SELECT COUNT(*) FROM products WHERE business_id=? AND package_uom_id=?) package_products,
+            (SELECT COUNT(*) FROM purchase_items WHERE business_id=? AND purchase_uom_id=?) purchase_lines,
+            (SELECT COUNT(*) FROM sale_items WHERE business_id=? AND sale_uom_id=?) sale_lines');
+        mysqli_stmt_bind_param($usageStmt, 'iiiiiiii', $businessId, $unitId, $businessId, $unitId, $businessId, $unitId, $businessId, $unitId);
         mysqli_stmt_execute($usageStmt);
-        $usage = (int)(mysqli_fetch_assoc(mysqli_stmt_get_result($usageStmt))['total'] ?? 0);
-        if ($usage > 0) throw new RuntimeException('This unit is used by ' . $usage . ' product(s). Assign another unit before deleting it.');
+        $usage = mysqli_fetch_assoc(mysqli_stmt_get_result($usageStmt)) ?: [];
+        $usageTotal = array_sum(array_map('intval', $usage));
+        if ($usageTotal > 0) throw new RuntimeException('This unit cannot be deleted because it is used by a product or historical purchase/sale transaction.');
         $stmt = mysqli_prepare($conn, 'DELETE FROM units_of_measure WHERE id=? AND business_id=?');
         mysqli_stmt_bind_param($stmt, 'ii', $unitId, $businessId);
         if (!mysqli_stmt_execute($stmt) || mysqli_stmt_affected_rows($stmt) !== 1) throw new RuntimeException('The unit could not be deleted.');

@@ -42,6 +42,7 @@ try {
         $customerId = !empty($_POST['customer_id']) ? (int)$_POST['customer_id'] : null;
         $notes = trim((string)($_POST['notes'] ?? '')) ?: null;
         $productIds = is_array($_POST['product_ids'] ?? null) ? $_POST['product_ids'] : [];
+        $saleUomIds = is_array($_POST['sale_uom_ids'] ?? null) ? $_POST['sale_uom_ids'] : [];
         $quantities = is_array($_POST['quantities'] ?? null) ? $_POST['quantities'] : [];
         $unitPrices = is_array($_POST['unit_prices'] ?? null) ? $_POST['unit_prices'] : [];
         $batchIds = is_array($_POST['batch_ids'] ?? null) ? $_POST['batch_ids'] : [];
@@ -68,7 +69,7 @@ try {
         try {
             claimIdempotencyKey($conn, $businessId, $idempotencyKey, 'SALE_COMPLETION', [
                 'sale_number'=>$saleNumber,'sold_at'=>$soldAtInput,'location_id'=>$locationId,
-                'customer_id'=>$customerId,'products'=>$productIds,'quantities'=>$quantities,
+                'customer_id'=>$customerId,'products'=>$productIds,'sale_uom_ids'=>$saleUomIds,'quantities'=>$quantities,
                 'prices'=>$unitPrices,'batches'=>$batchIds,'payment_method'=>$paymentMethod
             ]);
 
@@ -106,29 +107,37 @@ try {
             $validItems = 0;
             $overrideAudits = [];
             $saleLines = [];
+            $transactionUnits = [];
 
             foreach ($productIds as $index => $rawProductId) {
                 $productId = (int)$rawProductId;
-                $quantity = (float)($quantities[$index] ?? 0);
-                $submittedPrice = (float)($unitPrices[$index] ?? 0);
+                $saleUomId = (int)($saleUomIds[$index] ?? 0);
+                $saleQuantity = normalizeInventoryDecimal($quantities[$index] ?? 0, 'Sale quantity');
+                $submittedPrice = normalizeInventoryDecimal($unitPrices[$index] ?? 0, 'Sale unit price');
                 $batchId = !empty($batchIds[$index]) ? (int)$batchIds[$index] : null;
-                if ($productId <= 0 || $quantity <= 0) continue;
+                if ($productId <= 0 || $saleQuantity <= 0) continue;
 
-                $productStmt = mysqli_prepare($conn, 'SELECT id,name,sku,sale_price,cost_price,track_batches,track_expiry FROM products WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
+                $productStmt = mysqli_prepare($conn, 'SELECT id,name,sku,uom_id,uom,package_uom_id,units_per_package,package_sale_price,sale_price,cost_price,track_batches,track_expiry FROM products WHERE id=? AND business_id=? AND is_active=1 LIMIT 1');
                 mysqli_stmt_bind_param($productStmt, 'ii', $productId, $businessId);
                 mysqli_stmt_execute($productStmt);
                 $product = mysqli_fetch_assoc(mysqli_stmt_get_result($productStmt));
                 if (!$product) throw new RuntimeException('One of the selected products is unavailable.');
 
-                $defaultPrice = (float)$product['sale_price'];
-                $price = $submittedPrice;
-                if ($price < 0) throw new InvalidArgumentException('Selling price cannot be negative.');
-                if (abs($price - $defaultPrice) > 0.00005) {
+                $transactionUom = resolveProductTransactionUom($conn, $businessId, $product, $saleUomId);
+                $conversionFactor = (float)$transactionUom['factor'];
+                $quantity = convertTransactionQuantityToBase($saleQuantity, $conversionFactor);
+                $defaultPrice = $transactionUom['is_package']
+                    ? ($product['package_sale_price'] === null ? normalizeInventoryDecimal((float)$product['sale_price'] * $conversionFactor, 'Default package selling price') : (float)$product['package_sale_price'])
+                    : (float)$product['sale_price'];
+                $saleUnitPrice = $submittedPrice;
+                if ($saleUnitPrice < 0) throw new InvalidArgumentException('Selling price cannot be negative.');
+                if (abs($saleUnitPrice - $defaultPrice) > 0.00005) {
                     if (!$canOverridePrice) {
                         throw new RuntimeException('You do not have permission to override the selling price for ' . $product['name'] . '.');
                     }
-                    $overrideAudits[] = ['product_id'=>$productId,'product'=>$product['name'],'default_price'=>$defaultPrice,'overridden_price'=>$price];
+                    $overrideAudits[] = ['product_id'=>$productId,'product'=>$product['name'],'selected_uom_id'=>$saleUomId,'selected_uom_code'=>$transactionUom['code'],'default_price'=>$defaultPrice,'overridden_price'=>$saleUnitPrice];
                 }
+                $price = convertTransactionUnitPriceToBase($saleUnitPrice, $conversionFactor, 'Sale unit price');
 
                 if ((int)$product['track_batches'] === 1) {
                     if ($batchId === null) throw new RuntimeException('Select a batch/lot for ' . $product['name'] . '.');
@@ -165,8 +174,8 @@ try {
                     ? calculateSaleTax($netSales, $activeTax)
                     : 0.0;
                 $lineTotal = $netSales + $lineTax;
-                $itemStmt = mysqli_prepare($conn, 'INSERT INTO sale_items (business_id,sale_id,product_id,batch_id,quantity,unit_price,discount_amount,tax_amount,net_sales_amount,line_total,unit_cost_at_sale,cogs_total,created_at) VALUES (?,?,?,?,?,?,0,?,?,?,?,?,UTC_TIMESTAMP(6))');
-                mysqli_stmt_bind_param($itemStmt, 'iiiiddddddd', $businessId, $saleId, $productId, $batchId, $quantity, $price, $lineTax, $netSales, $lineTotal, $unitCost, $cogs);
+                $itemStmt = mysqli_prepare($conn, 'INSERT INTO sale_items (business_id,sale_id,product_id,batch_id,sale_uom_id,sale_quantity,conversion_factor_to_base,sale_unit_price,quantity,unit_price,discount_amount,tax_amount,net_sales_amount,line_total,unit_cost_at_sale,cogs_total,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,UTC_TIMESTAMP(6))');
+                mysqli_stmt_bind_param($itemStmt, 'iiiiidddddddddd', $businessId, $saleId, $productId, $batchId, $saleUomId, $saleQuantity, $conversionFactor, $saleUnitPrice, $quantity, $price, $lineTax, $netSales, $lineTotal, $unitCost, $cogs);
                 if (!mysqli_stmt_execute($itemStmt)) throw new RuntimeException('A sale item could not be saved.');
                 $saleItemId = mysqli_insert_id($conn);
                 $saleLines[] = ['id'=>$saleItemId, 'net_sales'=>$netSales];
@@ -187,6 +196,7 @@ try {
                 $subtotal += $netSales;
                 $totalTax += $lineTax;
                 $totalCogs += $cogs;
+                $transactionUnits[] = ['product_id'=>$productId,'selected_uom_id'=>$saleUomId,'selected_uom_code'=>$transactionUom['code'],'entered_quantity'=>$saleQuantity,'conversion_factor_to_base'=>$conversionFactor,'base_quantity'=>$quantity,'entered_unit_price'=>$saleUnitPrice,'normalized_base_price'=>$price];
                 $validItems++;
             }
 
@@ -221,7 +231,7 @@ try {
                 writeAuditLog($conn, $businessId, 'SALE_PRICE_OVERRIDDEN', 'sale', $saleId, $override);
             }
             writeAuditLog($conn, $businessId, 'SALE_COMPLETED', 'sale', $saleId, [
-                'sale_number'=>$saleNumber,'items'=>$validItems,'total_amount'=>$totalAmount,
+                'sale_number'=>$saleNumber,'items'=>$validItems,'transaction_units'=>$transactionUnits,'total_amount'=>$totalAmount,
                 'total_cogs'=>$totalCogs,'amount_paid'=>$amountPaid,'outstanding'=>max(0, $totalAmount - $amountPaid),
                 'tax'=>$activeTax ? ['id'=>$activeTax['id'],'name'=>$activeTax['name'],'type'=>$activeTax['tax_type'],'value'=>$activeTax['tax_value'],'amount'=>$totalTax] : null
             ]);
@@ -265,19 +275,22 @@ try {
             $returnedCount = 0;
             $restockedCount = 0;
             $refundOnlyCount = 0;
+            $returnUnits = [];
 
             foreach ($itemIds as $index => $rawItemId) {
                 $saleItemId = (int)$rawItemId;
-                $quantity = (float)($returnQuantities[$index] ?? 0);
+                $enteredQuantity = normalizeInventoryDecimal($returnQuantities[$index] ?? 0, 'Sale return quantity');
                 $restock = ($dispositions[$index] ?? 'RESTOCK') === 'RESTOCK';
-                if ($saleItemId <= 0 || $quantity <= 0) continue;
-                $itemStmt = mysqli_prepare($conn, "SELECT si.product_id,si.batch_id,si.quantity,si.unit_price,si.tax_amount,si.unit_cost_at_sale,COALESCE((SELECT SUM(sri.quantity) FROM sale_return_items sri JOIN sale_returns sr ON sr.id=sri.sale_return_id WHERE sri.sale_item_id=si.id AND sr.status='COMPLETED'),0) returned_quantity FROM sale_items si WHERE si.id=? AND si.sale_id=? AND si.business_id=? FOR UPDATE");
+                if ($saleItemId <= 0 || $enteredQuantity <= 0) continue;
+                $itemStmt = mysqli_prepare($conn, "SELECT si.product_id,si.batch_id,si.sale_uom_id,si.conversion_factor_to_base,si.quantity,si.unit_price,si.tax_amount,si.unit_cost_at_sale,u.code sale_uom,COALESCE((SELECT SUM(sri.quantity) FROM sale_return_items sri JOIN sale_returns sr ON sr.id=sri.sale_return_id WHERE sri.sale_item_id=si.id AND sr.status='COMPLETED'),0) returned_quantity FROM sale_items si JOIN units_of_measure u ON u.id=si.sale_uom_id WHERE si.id=? AND si.sale_id=? AND si.business_id=? FOR UPDATE");
                 mysqli_stmt_bind_param($itemStmt, 'iii', $saleItemId, $saleId, $businessId);
                 mysqli_stmt_execute($itemStmt);
                 $item = mysqli_fetch_assoc(mysqli_stmt_get_result($itemStmt));
                 if (!$item) throw new RuntimeException('A selected sale item is invalid.');
+                $factor = normalizeInventoryDecimal($item['conversion_factor_to_base'], 'Sale conversion factor');
+                $quantity = convertTransactionQuantityToBase($enteredQuantity, $factor);
                 $remainingReturnable = (float)$item['quantity'] - (float)$item['returned_quantity'];
-                if ($quantity > $remainingReturnable + 0.00005) throw new RuntimeException('Returned quantity exceeds the quantity still returnable.');
+                if ($quantity > $remainingReturnable + 0.00005) throw new RuntimeException('Returned quantity exceeds the ' . formatInventoryDecimal(convertBaseQuantityToTransaction($remainingReturnable, $factor)) . ' ' . $item['sale_uom'] . ' still returnable.');
                 $lineTaxRefund = (float)$item['quantity'] > 0
                     ? ($quantity / (float)$item['quantity']) * (float)$item['tax_amount']
                     : 0.0;
@@ -298,6 +311,7 @@ try {
                 }
                 $refundAmount += $lineTotal;
                 $returnedCount++;
+                $returnUnits[] = ['product_id'=>(int)$item['product_id'],'selected_uom_id'=>(int)$item['sale_uom_id'],'selected_uom_code'=>$item['sale_uom'],'entered_quantity'=>$enteredQuantity,'conversion_factor_to_base'=>$factor,'base_quantity'=>$quantity,'normalized_base_price'=>(float)$item['unit_price']];
             }
             if ($returnedCount === 0) throw new InvalidArgumentException('Enter at least one returned quantity.');
             $updateReturn = mysqli_prepare($conn, 'UPDATE sale_returns SET refund_amount=? WHERE id=? AND business_id=?');
@@ -311,7 +325,7 @@ try {
             $saleUpdate = mysqli_prepare($conn, 'UPDATE sales SET status=?,updated_at=UTC_TIMESTAMP(6) WHERE id=? AND business_id=?');
             mysqli_stmt_bind_param($saleUpdate, 'sii', $newStatus, $saleId, $businessId);
             mysqli_stmt_execute($saleUpdate);
-            writeAuditLog($conn, $businessId, 'SALE_RETURNED', 'sale_return', $returnId, ['sale_id'=>$saleId,'return_number'=>$returnNumber,'refund_amount'=>$refundAmount,'sale_status'=>$newStatus,'restocked_lines'=>$restockedCount,'refund_only_lines'=>$refundOnlyCount]);
+            writeAuditLog($conn, $businessId, 'SALE_RETURNED', 'sale_return', $returnId, ['sale_id'=>$saleId,'return_number'=>$returnNumber,'refund_amount'=>$refundAmount,'sale_status'=>$newStatus,'restocked_lines'=>$restockedCount,'refund_only_lines'=>$refundOnlyCount,'transaction_units'=>$returnUnits]);
             completeIdempotencyKey($conn, $businessId, $idempotencyKey, 201, ['sale_return_id'=>$returnId]);
             mysqli_commit($conn);
             $redirect('Sale return completed. Only items marked usable were restored to stock.', 'success', 'view=history');

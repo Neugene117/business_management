@@ -520,6 +520,101 @@ function completeIdempotencyKey($conn, int $businessId, string $key, int $respon
     }
 }
 
+/** Normalize values stored in DECIMAL(18,4) inventory columns. */
+function normalizeInventoryDecimal($value, string $label = 'Quantity'): float {
+    if (!is_numeric($value)) {
+        throw new InvalidArgumentException($label . ' must be a valid number.');
+    }
+    $normalized = round((float)$value, 4);
+    if (!is_finite($normalized)) {
+        throw new InvalidArgumentException($label . ' must be a finite number.');
+    }
+    return abs($normalized) < 0.00005 ? 0.0 : $normalized;
+}
+
+/** Resolve a submitted transaction UOM from trusted product and tenant data. */
+function resolveProductTransactionUom($conn, int $businessId, array $product, int $selectedUomId): array {
+    $baseUomId = (int)($product['uom_id'] ?? 0);
+    $packageUomId = !empty($product['package_uom_id']) ? (int)$product['package_uom_id'] : null;
+    if ($selectedUomId <= 0 || ($selectedUomId !== $baseUomId && $selectedUomId !== $packageUomId)) {
+        throw new InvalidArgumentException('Select a valid transaction unit for ' . ($product['name'] ?? 'this product') . '.');
+    }
+
+    $unitStmt = mysqli_prepare($conn, 'SELECT id,code,name,symbol FROM units_of_measure WHERE id=? AND (business_id IS NULL OR business_id=?) LIMIT 1');
+    mysqli_stmt_bind_param($unitStmt, 'ii', $selectedUomId, $businessId);
+    mysqli_stmt_execute($unitStmt);
+    $unit = mysqli_fetch_assoc(mysqli_stmt_get_result($unitStmt));
+    if (!$unit) {
+        throw new InvalidArgumentException('The selected transaction unit is not available to this business.');
+    }
+
+    $isPackage = $packageUomId !== null && $selectedUomId === $packageUomId;
+    $factor = $isPackage ? normalizeInventoryDecimal($product['units_per_package'] ?? 0, 'Units per package') : 1.0;
+    if ($factor <= 0) {
+        throw new InvalidArgumentException('The product package conversion is invalid.');
+    }
+    return [
+        'id' => $selectedUomId,
+        'code' => (string)$unit['code'],
+        'name' => (string)$unit['name'],
+        'factor' => $factor,
+        'is_package' => $isPackage,
+    ];
+}
+
+function convertTransactionQuantityToBase($quantity, $conversionFactor): float {
+    $quantity = normalizeInventoryDecimal($quantity, 'Quantity');
+    $factor = normalizeInventoryDecimal($conversionFactor, 'Conversion factor');
+    if ($quantity <= 0 || $factor <= 0) {
+        throw new InvalidArgumentException('Quantity and conversion factor must be greater than zero.');
+    }
+    $baseQuantity = normalizeInventoryDecimal($quantity * $factor, 'Base quantity');
+    if ($baseQuantity <= 0) {
+        throw new InvalidArgumentException('The converted base quantity is too small.');
+    }
+    return $baseQuantity;
+}
+
+function convertTransactionUnitPriceToBase($unitPrice, $conversionFactor, string $label = 'Unit price'): float {
+    $price = normalizeInventoryDecimal($unitPrice, $label);
+    $factor = normalizeInventoryDecimal($conversionFactor, 'Conversion factor');
+    if ($price < 0 || $factor <= 0) {
+        throw new InvalidArgumentException($label . ' cannot be negative and the conversion factor must be greater than zero.');
+    }
+    return normalizeInventoryDecimal($price / $factor, 'Base ' . strtolower($label));
+}
+
+function convertBaseQuantityToTransaction($baseQuantity, $conversionFactor): float {
+    $base = normalizeInventoryDecimal($baseQuantity, 'Base quantity');
+    $factor = normalizeInventoryDecimal($conversionFactor, 'Conversion factor');
+    if ($factor <= 0) throw new InvalidArgumentException('Conversion factor must be greater than zero.');
+    return normalizeInventoryDecimal($base / $factor, 'Transaction quantity');
+}
+
+function formatInventoryDecimal($quantity): string {
+    $quantity = normalizeInventoryDecimal($quantity);
+    if (abs($quantity - round($quantity)) < 0.00005) return number_format($quantity, 0, '.', '');
+    return number_format($quantity, 4, '.', '');
+}
+
+/** Format canonical base stock as full packages plus a base-unit remainder. */
+function formatBaseInventoryAsPackages($baseQuantity, string $baseUomCode, ?string $packageUomCode = null, $unitsPerPackage = null): string {
+    $base = normalizeInventoryDecimal($baseQuantity, 'Stock quantity');
+    $factor = $unitsPerPackage === null ? 0.0 : normalizeInventoryDecimal($unitsPerPackage, 'Units per package');
+    if ($packageUomCode === null || $packageUomCode === '' || $factor <= 0) {
+        return formatInventoryDecimal($base) . ' ' . $baseUomCode;
+    }
+
+    $sign = $base < 0 ? '-' : '';
+    $absolute = abs($base);
+    $packages = (int)floor(($absolute + 0.0000001) / $factor);
+    $remainder = normalizeInventoryDecimal($absolute - ($packages * $factor), 'Stock remainder');
+    $parts = [];
+    if ($packages > 0) $parts[] = $sign . $packages . ' ' . $packageUomCode;
+    if ($remainder > 0 || !$parts) $parts[] = ($parts ? '' : $sign) . formatInventoryDecimal($remainder) . ' ' . $baseUomCode;
+    return implode($base < 0 ? ' - ' : ' + ', $parts);
+}
+
 function lockInventoryBalance($conn, int $businessId, int $locationId, int $productId): array {
     $insert = mysqli_prepare($conn, 'INSERT IGNORE INTO inventory_balances (business_id,location_id,product_id,quantity_on_hand,reserved_quantity,average_unit_cost,updated_at) VALUES (?,?,?,0,0,0,UTC_TIMESTAMP(6))');
     mysqli_stmt_bind_param($insert, 'iii', $businessId, $locationId, $productId);

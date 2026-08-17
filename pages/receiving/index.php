@@ -95,7 +95,7 @@ if ($purchaseId > 0) {
     $selectedPurchase = mysqli_fetch_assoc(mysqli_stmt_get_result($selectedStmt));
     if ($selectedPurchase) {
         $lineStmt = mysqli_prepare($conn, 'SELECT pi.id,pi.ordered_quantity,pi.received_quantity,pi.unit_cost,pi.unit_selling_price,pi.line_total,
-                pr.name product_name,pr.sku,pr.uom,pb.lot_number,pb.expires_at
+                pr.name product_name,pr.sku,pr.uom,pb.lot_number,COALESCE(pi.expiry_date,pb.expires_at) expires_at
             FROM purchase_items pi
             JOIN products pr ON pr.id=pi.product_id AND pr.business_id=pi.business_id
             LEFT JOIN product_batches pb ON pb.id=pi.batch_id AND pb.business_id=pi.business_id
